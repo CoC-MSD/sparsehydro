@@ -69,6 +69,8 @@ Public API
      - Any Platypus algorithm (requires platypus-opt)
    * - :class:`ScipySolver`
      - SciPy single-objective (requires scipy)
+   * - :class:`OptunaCmaEsSolver`
+     - Single-objective CMA-ES, multi-seed / parallel (requires optuna)
 """
 
 from .callbacks import ProgressCallback
@@ -86,10 +88,11 @@ from .objectives import (
     LogNSE,
     IndexOfAgreement,
     ConcordanceCorrelationCoefficient,
+    DisjointWindowCCC,
 )
 from .problem import CalibrationProblem
 from .result import CalibrationResult, GenerationRecord, _identify_pareto
-from .solvers import ISolver, NSGAIISolver, ParticleSwarmSolver, PlatypusSolver, ScipySolver
+from .solvers import ISolver, NSGAIISolver, OptunaCmaEsSolver, ParticleSwarmSolver, PlatypusSolver, ScipySolver
 
 __all__ = [
     # Objectives
@@ -106,6 +109,7 @@ __all__ = [
     "LogNSE",
     "IndexOfAgreement",
     "ConcordanceCorrelationCoefficient",
+    "DisjointWindowCCC",
     # Problem
     "CalibrationProblem",
     # Result
@@ -114,6 +118,7 @@ __all__ = [
     # Solvers
     "ISolver",
     "NSGAIISolver",
+    "OptunaCmaEsSolver",
     "ParticleSwarmSolver",
     "PlatypusSolver",
     "ScipySolver",

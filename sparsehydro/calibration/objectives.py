@@ -621,6 +621,46 @@ class ConcordanceCorrelationCoefficient(IObjective):
         return _concordance_correlation_coefficient(observed, predicted)
 
 
+class DisjointWindowCCC(IObjective):
+    """Composite CCC over two disjoint windows on ONE observed/predicted pair.
+
+    Grades the same ``(observed, predicted)`` arrays on ``dry_mask`` and
+    ``storm_mask`` separately and returns ``w_dry*CCC_dry + w_storm*CCC_storm``.
+    Overrides :meth:`compute` to apply its own masks, ignoring any problem-level
+    mask (each window scores the whole-flow signal on a different portion of the
+    record — dry windows grade the baseflow, storm windows grade the peaks).
+
+    Defined at package scope (not in a notebook cell) so ``cloudpickle`` can
+    serialise a :class:`~sparsehydro.calibration.problem.CalibrationProblem`
+    carrying it into ``loky`` worker processes — the prerequisite for the
+    multi-seed *parallel* CMA-ES path (``OptunaCmaEsSolver(n_jobs>1)``).
+
+    :param dry_mask: Boolean mask selecting the dry (baseflow) scoring window.
+    :param storm_mask: Boolean mask selecting the storm (peak) scoring window.
+    :param w_dry: Weight on the dry-window CCC.
+    :param w_storm: Weight on the storm-window CCC.
+    """
+
+    name = "disjoint_ccc"
+    minimize = False
+
+    def __init__(self, dry_mask, storm_mask, w_dry=0.5, w_storm=0.5, mask=None):
+        super().__init__(mask=mask)
+        self._dry = np.asarray(dry_mask, dtype=bool)
+        self._storm = np.asarray(storm_mask, dtype=bool)
+        self._w_dry = float(w_dry)
+        self._w_storm = float(w_storm)
+        self._ccc = ConcordanceCorrelationCoefficient()
+
+    def evaluate(self, observed, predicted):        # only hit if called mask-less
+        return self._ccc.evaluate(observed, predicted)
+
+    def compute(self, observed, predicted, mask=None):
+        cd = self._ccc.compute(observed, predicted, mask=self._dry)
+        cs = self._ccc.compute(observed, predicted, mask=self._storm)
+        return self._w_dry * cd + self._w_storm * cs
+
+
 # ---------------------------------------------------------------------------
 # Pure function implementations (no external dependencies)
 # ---------------------------------------------------------------------------
