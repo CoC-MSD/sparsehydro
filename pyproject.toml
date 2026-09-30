@@ -51,6 +51,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+viewer = [
+    "streamlit>=1.50",
+]
 docs = [
     "sphinx>=7.0",
     "pydata-sphinx-theme>=0.15",
@@ -63,6 +66,9 @@ dev = [
     "pytest-cov",
     "sparsehydro[docs]",
 ]
+
+[project.scripts]
+sparsehydro-viewer = "sparsehydro.viewer.cli:main"
 
 [project.urls]
 Homepage = "https://coc-msd.github.io/SparseHydro/#documentation"

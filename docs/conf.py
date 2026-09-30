@@ -108,7 +108,7 @@ intersphinx_mapping = {
     "torch": ("https://pytorch.org/docs/stable", None),
 }
 
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "rdii_design.md", "unithydrograph_strategy.md", "combined_model.md", "ensemble_visualization_plan.md", "QAQC_dt.md"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "rdii_design.md", "unithydrograph_strategy.md", "combined_model.md", "ensemble_visualization_plan.md", "QAQC_dt.md", "parsimonious_integration_plan.md"]
 
 suppress_warnings = [
     "ref.myst",

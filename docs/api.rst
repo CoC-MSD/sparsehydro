@@ -249,6 +249,28 @@ to bound each event.  Overlapping events are merged or split at the trough.
 
 ----
 
+Viewer
+------
+
+Interactive Streamlit app for stepping through
+:func:`~sparsehydro.events.detect_event_hierarchy` +
+:class:`~sparsehydro.models.unithydrograph.GlobalSequentialFitter` results by
+global event (Overview, Smoothing, UH Shape, Convolution).  Install the
+``viewer`` extra and launch it from a shell:
+
+.. code-block:: bash
+
+   pip install "sparsehydro[viewer]"
+   sparsehydro-viewer path/to/rain_stormflow.csv
+
+.. automodule:: sparsehydro.viewer.data
+   :members:
+
+.. automodule:: sparsehydro.viewer.cli
+   :members:
+
+----
+
 Unit Hydrograph
 ---------------
 
