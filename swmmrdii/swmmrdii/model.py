@@ -798,7 +798,7 @@ class RdiiModel:
            reference for each subcatchment (substituting the per-subcatchment
            area).
         4. Extracts the list of calibratable parameters and their log-scale
-           flags for use by the Optuna objective function.
+           flags for use by the calibration objective function.
 
         Parameters
         ----------
@@ -817,7 +817,7 @@ class RdiiModel:
             *calibrate_temperature_params=True* to allow them to vary.
         calibrate_temperature_params : bool
             If True, ``ia_kT``, ``ia_T_ref``, and ``ia_T_freeze`` are included
-            in the Optuna search.  The notebooks use False for the single-SC
+            in the calibration search.  The notebooks use False for the single-SC
             model and True for the multi-SC model (where equifinality has been
             accepted and extra degrees of freedom help volume balance).
         """
@@ -910,7 +910,7 @@ class RdiiModel:
             )
 
         # IA parameters — temperature params are fixed by default to reduce
-        # search dimensionality.  The calibrate flag controls whether Optuna
+        # search dimensionality.  The calibrate flag controls whether calibration
         # includes them in the search space.
         ref_model.set_parameter(
             f"{alias}_ia_max",
@@ -939,7 +939,7 @@ class RdiiModel:
         # ---- Extract calibratable parameter metadata -----------------------
         # Log-scale sampling is used for parameters spanning > 1 order of
         # magnitude (R fractions, IA capacity, IA rate constants) because
-        # Optuna's log sampling is more efficient in that regime.
+        # calibration's log sampling is more efficient in that regime.
         LOG_SCALE_SUFFIXES = ("_R_", "_ia_max", "_ia_k0", "_ia_k_dep")
 
         def _use_log(name: str, lb: float, ub: float) -> bool:
@@ -971,7 +971,7 @@ class RdiiModel:
         # The reference model above has the watershed-level area; each
         # subcatchment template is a deep copy with its own area substituted.
         # Deep-copying a validated EnsembleModel is much faster than calling
-        # make_rtk_ensemble + all set_parameter calls again for every Optuna
+        # make_rtk_ensemble + all set_parameter calls again for every calibration
         # trial.
         self._templates = []
         for _, sc_row in self._sc_df.iterrows():

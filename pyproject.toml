@@ -51,6 +51,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+notebook = [
+    "ipykernel>=6.0",
+    "numba>=0.60",
+    "openpyxl>=3.1",
+    "kaleido>=1.0",
+]
+excel = [
+    "openpyxl>=3.1",
+]
+parallel = [
+    "joblib>=1.3",
+]
 viewer = [
     "streamlit>=1.50",
 ]
@@ -61,10 +73,14 @@ docs = [
     "sphinx-design>=0.5",
     "sphinxcontrib-mermaid>=0.9",
 ]
+speed = [
+    "numba>=0.60",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
     "sparsehydro[docs]",
+    "sparsehydro[speed]",
 ]
 
 [project.scripts]
@@ -75,6 +91,27 @@ Homepage = "https://coc-msd.github.io/SparseHydro/#documentation"
 Repository = "https://github.com/MSDGC-SWM/sparsehydro"
 Documentation = "https://MSDGC-SWM.github.io/sparsehydro"
 Issues = "https://github.com/MSDGC-SWM/sparsehydro/issues"
+
+[tool.hatch.build]
+exclude = [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/*.pyo",
+    "**/*.nbc",
+    "**/*.nbi",
+    "**/.ipynb_checkpoints/**",
+    "**/.pytest_cache/**",
+    "**/artifacts/**",
+    "**/htmlcov/**",
+    "**/.coverage*",
+    "**/coverage.xml",
+    "**/*.bak",
+    "**/build_notebook*.py",
+    "**/rebuild_notebook*.py",
+    "**/*builder*.py",
+    "**/patch_*.py",
+    "**/update_notebook*.py",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["sparsehydro"]

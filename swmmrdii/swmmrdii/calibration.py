@@ -1,24 +1,13 @@
 """
 CalOptimizer — calibration engine for swmmrdii.
 
-Supports two solver backends, selected automatically from the ``sampler``
-argument:
+Uses sparsehydro's ``CalibrationProblem`` + solver API with Platypus, pymoo
+and SciPy. Every evaluation proposes parameters, simulates all subcatchments,
+and computes the configured objectives.
 
-Optuna backend (default)
-------------------------
-Wraps Optuna studies.  Each Optuna trial proposes a parameter vector, runs
-the RDII model, computes the objective, and reports back.
-
-    Samplers:  'CMA-ES' (default), 'TPE', 'NSGAII'
-    Budget:    controlled by ``n_trials``
-
-sparsehydro backend
--------------------
-Uses sparsehydro's built-in ``CalibrationProblem`` + solver API.  These
-solvers use pymoo / scipy / platypus under the hood — entirely separate from
-Optuna.  The sparsehydro library itself is never modified.
-
-    Samplers:  'scipy' (differential_evolution, default scipy method),
+    Samplers:  'CMA-ES' (Platypus, default; single objective),
+               'NSGAII' (alias for sh_nsga2),
+               'scipy' (differential_evolution, default scipy method),
                'sh_nsga2'   (pymoo NSGA-II via sparsehydro),
                'sh_pso'     (SMPSO particle-swarm via platypus),
                'sh_platypus' (generic platypus wrapper — pass algorithm_class
@@ -26,25 +15,23 @@ Optuna.  The sparsehydro library itself is never modified.
     Budget:    controlled by ``n_trials`` (mapped to maxiter / n_gen / n_evals
                depending on the solver)
 
-Both backends support the same objective keys (see OBJECTIVE_REGISTRY and
-CalOptimizer.list_objectives()).  Warm-up buffer, BFI R₃ scaling, and
-calibration-window slicing are handled identically regardless of backend.
+All solvers share the objective registry, warm-up handling, BFI R₃ scaling,
+network lags, physical feasibility gates and calibration-window slicing.
+TPE is not supported.
 """
 
 from __future__ import annotations
 
 import copy
-import functools
 import json
 import math
 import os
-import pickle
 import warnings
 from datetime import datetime as _dt
 from typing import Optional
 
 import numpy as np
-import optuna
+from sparsehydro.calibration.problem import CalibrationProblem
 import pandas as pd
 
 from .model import RdiiModel
@@ -57,28 +44,10 @@ _SCREENED_SELECTIONS = ("robust", "balanced")
 _ALL_SELECTIONS = _SCREENED_SELECTIONS + ("objective",)
 
 
-def _in_jupyter_kernel() -> bool:
-    """True when running inside an IPython/Jupyter ZMQ kernel.
-
-    Process-parallel multi-start uses joblib/loky, which spawns child
-    processes.  In a standalone script that is fine, but inside a VS Code /
-    Jupyter kernel the loky bootstrap can destabilise the embedded kernel
-    (it disposes the notebook controller → "notebook controller is DISPOSED").
-    So we auto-fall-back to sequential seeds in that context; scripts still get
-    the parallel speedup.
-    """
-    try:
-        from IPython import get_ipython
-        ip = get_ipython()
-        return ip is not None and type(ip).__name__ == "ZMQInteractiveShell"
-    except Exception:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Inline metric functions
 # (Fast NumPy implementations — avoids sparsehydro class overhead inside
-# the Optuna hot loop where these are called millions of times.)
+# the calibration hot loop where these are called millions of times.)
 # ---------------------------------------------------------------------------
 
 def _fast_ccc(
@@ -197,8 +166,8 @@ def _index_of_agreement(obs: np.ndarray, pred: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 # Each entry: key → (compute_fn, minimize, short_description)
 #   compute_fn(obs, pred, obs_mean, obs_std, obs_var) → float
-#   minimize=True  means Optuna direction='minimize'
-#   minimize=False means Optuna direction='maximize'
+#   minimize=True  means calibration direction='minimize'
+#   minimize=False means calibration direction='maximize'
 #
 # Keys match the sparsehydro CalibrationProblem objective name strings
 # (lowercase).  Aliases (e.g. 'nse') are also registered for convenience.
@@ -329,28 +298,14 @@ def _resolve_objectives(raw) -> list[str]:
 # Sampler registry
 # ---------------------------------------------------------------------------
 # Each entry: key → (backend, display_name, single_ok, multi_ok, description)
-#   backend    : 'optuna' or 'sparsehydro'
+#   backend    : 'calibration' or 'sparsehydro'
 #   single_ok  : works for single-objective runs
 #   multi_ok   : works for multi-objective Pareto runs
 
 SAMPLER_REGISTRY: dict[str, tuple] = {
-    # ── Optuna backend ───────────────────────────────────────────────────────
     "cma-es": (
-        "optuna", "CMA-ES", True, False,
-        "Covariance Matrix Adaptation Evolution Strategy (Optuna). "
-        "Recommended for single-objective on continuous spaces. "
-        "Converges in ~2k–5k trials.",
-    ),
-    "tpe": (
-        "optuna", "TPE", True, False,
-        "Tree-structured Parzen Estimator (Optuna). "
-        "Good general-purpose default; handles mixed spaces well.",
-    ),
-    "nsgaii": (
-        "optuna", "NSGAII", True, True,
-        "Non-dominated Sorting Genetic Algorithm II (Optuna). "
-        "Required for multi-objective Pareto runs via Optuna backend. "
-        "Forced automatically when objective is a list.",
+        "sparsehydro", "CMA-ES", True, False,
+        "Single-objective CMA-ES via Platypus. n_trials is evaluations per seed.",
     ),
     # ── sparsehydro backend ──────────────────────────────────────────────────
     "scipy": (
@@ -382,9 +337,10 @@ def _resolve_sampler(key: str) -> str:
     k = key.strip().lower()
     # Explicit alias table — maps common variants to canonical registry keys.
     aliases = {
-        "nsga-ii":                "nsgaii",
-        "nsga2":                  "nsgaii",
-        "nsga_ii":                "nsgaii",
+        "nsgaii":                 "sh_nsga2",
+        "nsga-ii":                "sh_nsga2",
+        "nsga2":                  "sh_nsga2",
+        "nsga_ii":                "sh_nsga2",
         "cmaes":                  "cma-es",
         "cma_es":                 "cma-es",
         "differential_evolution": "scipy",
@@ -408,9 +364,77 @@ def _resolve_sampler(key: str) -> str:
 # CalOptimizer
 # ---------------------------------------------------------------------------
 
+
+class _RdiiCalibrationProblem(CalibrationProblem):
+    """Isolated multi-subcatchment evaluation, including logarithmic bounds."""
+
+    def __init__(self, owner, forcing):
+        self.owner = owner
+        self.forcing = forcing
+        self._param_names = [name for name, *_ in owner.model._param_meta]
+        self._log = np.array([log for _, _, _, log in owner.model._param_meta], dtype=bool)
+        bounds = np.array([(lo, hi) for _, lo, hi, _ in owner.model._param_meta], dtype=float)
+        if (not np.isfinite(bounds).all() or np.any(bounds[:, 0] >= bounds[:, 1])
+                or np.any(bounds[self._log] <= 0)):
+            raise ValueError("Calibration requires finite ordered bounds, positive for log parameters")
+        bounds[self._log] = np.log(bounds[self._log])
+        self._xl, self._xu = bounds.T
+        self._n_ieq_constr = 0
+        self._constraint_names = []
+        self._constraint_descriptions = []
+
+    @property
+    def n_objectives(self):
+        return len(self.owner._obj_keys)
+
+    @property
+    def objective_names(self):
+        return list(self.owner._obj_keys)
+
+    @property
+    def minimize_flags(self):
+        return [OBJECTIVE_REGISTRY[key][1] for key in self.owner._obj_keys]
+
+    def to_physical(self, x):
+        values = np.array(x, dtype=float, copy=True)
+        values[..., self._log] = np.exp(values[..., self._log])
+        return values
+
+    def to_search(self, params):
+        values = np.array([params[name] for name in self.param_names], dtype=float)
+        if np.any(values[self._log] <= 0):
+            raise ValueError("Warm-start log parameters must be positive")
+        values[self._log] = np.log(values[self._log])
+        return values
+
+    def evaluate(self, x, penalty_weight=1e6):
+        owner = self.owner
+        params = dict(zip(self.param_names, self.to_physical(x)))
+        if sum(params[name] for name in owner._r_sorted) > 1:
+            return np.full(self.n_objectives, 1e12)
+        prediction = owner._simulate_cal(params, self.forcing)
+        if prediction is None:
+            return np.full(self.n_objectives, 1e12)
+        scores = []
+        for key in owner._obj_keys:
+            fn, minimize, *_ = OBJECTIVE_REGISTRY[key]
+            value = fn(owner._obs_cal, prediction, owner._obs_cal_mean,
+                       owner._obs_cal_std, owner._obs_cal_var)
+            if not np.isfinite(value):
+                raise ValueError(f"Non-finite calibration objective: {key}")
+            scores.append(value if minimize else -value)
+        return np.asarray(scores, dtype=float)
+
+    def evaluate_single(self, x, index, penalty_weight=1e6):
+        return float(self.evaluate(x, penalty_weight)[index])
+
+    def make_copy(self):
+        return copy.deepcopy(self)
+
+
 class CalOptimizer:
     """
-    Optuna-based optimizer for an ``RdiiModel``.
+    Solver-agnostic optimizer for an ``RdiiModel``.
 
     Parameters
     ----------
@@ -437,14 +461,14 @@ class CalOptimizer:
         See ``CalOptimizer.list_objectives()`` for all available keys and
         their minimize/maximize directions.
     sampler : str
-        Optuna sampler name: ``'CMA-ES'`` (default), ``'TPE'``, or
-        ``'NSGAII'``.  Multi-objective mode always overrides to NSGA-II
-        regardless of this setting.
+        Solver name: ``'CMA-ES'`` (Platypus, default), ``'NSGAII'``
+        (existing pymoo implementation), or another registry entry.
+        CMA-ES requires a single objective; TPE is no longer supported.
     n_trials : int
-        Total number of Optuna trials.
+        Total number of calibration trials.
     n_startup : int or None
-        Number of random/startup trials before the main sampler kicks in.
-        Defaults to 10% of *n_trials*.
+        Population size: CMA-ES offspring size (default 10); otherwise the
+        existing population/swarm setting. CMA-ES has no startup phase.
     pbias_target : float
         In multi-objective mode, the maximum acceptable |PBIAS| (as a
         fraction, e.g. ``0.05`` = 5%) when selecting the Pareto-front knee
@@ -452,7 +476,7 @@ class CalOptimizer:
         maximize metric that also satisfies this constraint.
     seed_initial : bool
         If True, enqueue the RTKInitializer default parameter vector as the
-        first trial to give Optuna a good starting point.
+        first candidate in every CMA-ES seed; it counts against the evaluation budget.
     multi_start : int
         Number of independent CMA-ES runs (different seeds), keeping the
         global best.  Default 1 (single run, backward-compatible).  CMA-ES is
@@ -461,8 +485,6 @@ class CalOptimizer:
         even though every run is internally reproducible.  Setting e.g.
         ``multi_start=8`` runs seeds 42..49 and keeps the best, making the
         result robust to that fragility without relying on a lucky start.
-        (Optuna >=4.4 made ``CmaEsSampler`` restart strategies a no-op, so
-        multi-seed is the in-core way to escape local basins.)
     multi_start_seeds : list[int] or None
         Explicit seed list overriding the default ``42, 43, ...`` sequence.
         When given, ``multi_start`` is ignored and ``len(multi_start_seeds)``
@@ -475,8 +497,7 @@ class CalOptimizer:
         this after construction.
     progress_every : int
         Print a progress line every this many trials (default 100).
-        Only applies in multi-objective mode; single-objective uses Optuna's
-        built-in progress bar.
+        Sequential CMA-ES prints evaluation progress; parallel runs report seed completion.
     ia_max_ub : float or None
         Forwarded to ``RdiiModel._build_templates()``.  Superseded by
         ``param_bound_overrides={'ia_max': (None, x)}``; kept for
@@ -491,7 +512,7 @@ class CalOptimizer:
         Keys match a calibratable parameter by exact name or by suffix
         (``'R_3'`` matches ``m01_R_3``); values are ``(lower, upper)`` tuples
         where ``None`` keeps the existing bound.  Overrides update both the
-        Optuna search space and the template parameters (initial values are
+        calibration search space and the template parameters (initial values are
         clamped into the new bounds so the ``seed_initial`` trial stays
         valid).  A key that matches no parameter raises ``ValueError`` at
         ``optimize()`` start.  Note R_3 is the watershed-level value — with
@@ -623,15 +644,16 @@ class CalOptimizer:
         self._sampler_key: str = _resolve_sampler(sampler)
         entry = SAMPLER_REGISTRY[self._sampler_key]
         self.sampler_type: str = entry[1]          # display name, e.g. 'CMA-ES'
-        self._backend: str     = entry[0]          # 'optuna' or 'sparsehydro'
+        self._backend: str     = entry[0]
 
         self.n_trials = n_trials
-        self.n_startup = int(n_startup if n_startup is not None else max(50, n_trials * 0.1))
+        self.n_startup = int(n_startup if n_startup is not None else
+                             (10 if self._sampler_key == "cma-es" else max(50, n_trials * 0.1)))
         self.pbias_target = pbias_target
         self.seed_initial = seed_initial
         # Multi-start ensemble: run several CMA-ES studies from different seeds
         # and keep the global best.  Robust-by-construction against the
-        # local-basin fragility (see _make_sampler docstring).  multi_start is
+        # local-basin fragility.  multi_start is
         # the number of seeds; multi_start_seeds overrides the default
         # 42, 43, ... sequence with an explicit list.
         if multi_start_seeds is not None:
@@ -721,12 +743,11 @@ class CalOptimizer:
         self._val_end:   Optional[str] = None
 
         # Set by optimize() — available afterwards for plotting and export.
-        # For Optuna backend: self.study is the optuna.Study object.
-        # For sparsehydro backend: self.study is the CalibrationResult object.
+        # self.study holds a solver-agnostic CalibrationResult.
         # Both support self.best_params and calibration metrics.
         self.study = None
         self.best_params: Optional[dict[str, float]] = None
-        self.best_trial = None   # optuna.Trial for Optuna; None for sparsehydro
+        self.best_trial = None   # retained for summary compatibility
 
         # Calibration metrics populated by optimize().
         self.cal_ccc:   float = float("nan")
@@ -1148,7 +1169,7 @@ class CalOptimizer:
         """
         Apply ``param_bound_overrides`` to the built parameter metadata.
 
-        Updates both ``model._param_meta`` (the Optuna search space) and the
+        Updates both ``model._param_meta`` (the calibration search space) and the
         per-subcatchment template parameters, clamping each template's current
         value into the new bounds so the ``seed_initial`` enqueued trial stays
         inside the sampled range.  The log-sampling flag is dropped if a new
@@ -1306,7 +1327,7 @@ class CalOptimizer:
             }
 
         # R parameter names sorted so R_1 < R_2 < R_3 regardless of how
-        # Optuna discovers them.
+        # calibration discovers them.
         self._r_sorted = sorted(
             name for name, _, _, _ in self.model._param_meta if "_R_" in name
         )
@@ -1403,7 +1424,7 @@ class CalOptimizer:
         Parameters
         ----------
         params : dict
-            Full parameter dict from the Optuna trial.
+            Full parameter dict from the calibration trial.
         sc_forcing : list of DataFrames
             One warm-up-padded calibration forcing DataFrame per subcatchment,
             pre-sliced to [cal_start − warmup, cal_end].
@@ -1508,553 +1529,116 @@ class CalOptimizer:
         return total_pred
 
     # -----------------------------------------------------------------------
-    # Optuna objective + per-seed runner (bound methods so they are picklable
-    # for process-parallel multi-start via joblib/cloudpickle)
-    # -----------------------------------------------------------------------
-
-    def _objective(self, trial, prepared=None, masks=None):
-        """Optuna objective for one trial.
-
-        prepared/masks bind this trial to a specific prepared-model set (so
-        parallel seeds don't share mutable state); None falls back to the
-        shared self._prepared_models.  Reads forcing from self._sc_forcing_cal.
-        """
-        obj_fns = [
-            (k, OBJECTIVE_REGISTRY[k][0], OBJECTIVE_REGISTRY[k][1])
-            for k in self._obj_keys
-        ]
-        r_param_names = set(self._r_sorted)
-        obs_cal  = self._obs_cal
-        obs_mean = self._obs_cal_mean
-        obs_var  = self._obs_cal_var
-        obs_std  = self._obs_cal_std
-
-        params: dict[str, float] = {}
-        total_r = 0.0
-        for name, lb, ub, log in self.model._param_meta:
-            val = trial.suggest_float(name, lb, ub, log=log)
-            params[name] = val
-            if name in r_param_names:
-                total_r += val
-
-        # Optional per-subcatchment imperviousness exponent (meta-param).
-        # Hard gate: watershed-level sum of R fractions must be ≤ 1.0.
-        if total_r > 1.0:
-            raise optuna.exceptions.TrialPruned()
-
-        total_pred = self._simulate_cal(params, self._sc_forcing_cal, prepared, masks)
-        if total_pred is None:
-            raise optuna.exceptions.TrialPruned()
-
-        # Always store CCC/KGE/NSE/PBIAS so post-hoc analysis can read them
-        # regardless of which objectives were chosen.
-        ccc   = _fast_ccc(obs_cal, total_pred, obs_mean, obs_var)
-        kge   = _kge(obs_cal, total_pred, obs_mean, obs_std)
-        nse   = _nse(obs_cal, total_pred)
-        pbias = _pbias(obs_cal, total_pred)
-        trial.set_user_attr("ccc",   float(ccc))
-        trial.set_user_attr("kge",   float(kge))
-        trial.set_user_attr("nse",   float(nse))
-        trial.set_user_attr("pbias", float(pbias))
-
-        scores = []
-        for key, fn, _ in obj_fns:
-            if key == "ccc":
-                val = ccc
-            elif key == "kge":
-                val = kge
-            elif key in ("nse", "nash_sutcliffe"):
-                val = nse
-            elif key == "pbias":
-                val = abs(pbias)
-            else:
-                val = fn(obs_cal, total_pred, obs_mean, obs_std, obs_var)
-                trial.set_user_attr(key, float(val))
-            scores.append(val)
-
-        return tuple(scores) if self._is_multi else scores[0]
-
-    def _study_score(self, best_trial) -> float:
-        """Single comparable scalar for ranking studies (higher = better)."""
-        if self._is_multi:
-            obj_fns = [
-                (k, OBJECTIVE_REGISTRY[k][0], OBJECTIVE_REGISTRY[k][1])
-                for k in self._obj_keys
-            ]
-            key, _, minimize = obj_fns[0]
-            attr = key if key != "pbias" else "pbias"
-            v = best_trial.user_attrs.get(attr, float("nan"))
-            return -v if minimize else v
-        v = best_trial.value
-        minimize = OBJECTIVE_REGISTRY[self._obj_keys[0]][1]
-        return -v if minimize else v
-
-    def _run_one_seed(self, si, seed, n_seeds, create_kwargs, enqueue,
-                      is_multi, isolated, progress_dir=None):
-        """Run one CMA-ES seed to completion and return
-        ``(seed, study_score, best_trial, study)``.
-
-        Bound method (not a closure) so it pickles for joblib process workers.
-        ``isolated`` True → build a private prepared-model set (parallel seeds);
-        False → reuse the shared self._prepared_models (sequential path).
-        ``progress_dir`` set (parallel path) → write best-so-far to a per-seed
-        file the parent polls (worker stdout doesn't reach a Jupyter cell);
-        None (sequential) → print directly, which streams in every context.
-        """
-        # Workers are separate processes that don't inherit the parent's
-        # logging config, so silence Optuna's per-trial INFO spam here too.
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-        if isolated:
-            prepared, masks = self._build_prepared_models(self._sc_forcing_cal)
-        else:
-            prepared, masks = self._prepared_models, self._cal_masks
-
-        progress_every = self.progress_every
-
-        # Multi-objective progress: print the Pareto-knee metrics every N trials.
-        def _progress_cb(study, trial):
-            n = trial.number + 1
-            if n % progress_every != 0:
-                return
-            best = self._select_best_multi(study.best_trials)
-            if best is not None:
-                parts = []
-                for key in self._obj_keys:
-                    minimize = OBJECTIVE_REGISTRY[key][1]
-                    attr_key = key if key != "pbias" else "pbias"
-                    v = best.user_attrs.get(attr_key, float("nan"))
-                    label = OBJECTIVE_REGISTRY[key][2]
-                    parts.append(f"{label}={'|' if minimize else ''}{v:.3f}")
-                print(
-                    f"  [trial {n:>6}]  Pareto={len(study.best_trials):>4}  "
-                    + "  ".join(parts) + f"  (trial #{best.number})",
-                    flush=True,
-                )
-
-        # Display strategy depends only on whether THIS seed runs concurrently
-        # with others.  `progress_dir` is set only on the parallel path, so it
-        # doubles as the "am I a parallel worker?" flag.
-        #   - sequential (single OR multi seed): seeds run one-at-a-time, so a
-        #     tqdm bar never collides — show a real per-seed bar (Option A: an
-        #     Optuna callback ticks the bar one step per trial).  This is what
-        #     a single run always did, now extended to every sequential seed.
-        #   - parallel: worker stdout/tqdm can't reach a Jupyter cell, so write
-        #     best-so-far to a per-seed file the PARENT polls and prints.
-        is_parallel = progress_dir is not None
-        label = self.objective_mode
-        _seed_file = (
-            os.path.join(progress_dir, f"seed_{seed}.txt") if is_parallel else None
-        )
-
-        def _file_progress_cb(study, trial):
-            n = trial.number + 1
-            if n % progress_every != 0:
-                return
-            try:
-                bv = study.best_value
-            except ValueError:
-                return  # no completed trial yet
-            try:
-                with open(_seed_file, "w") as fh:
-                    fh.write(f"{n} {bv:.6f}")
-            except OSError:
-                pass
-
-        if n_seeds > 1:
-            print(f"  [multi-start {si + 1}/{n_seeds}]  seed={seed}",
-                  flush=True)
-
-        sampler = self._make_sampler(seed=seed)
-        study = optuna.create_study(sampler=sampler, **create_kwargs)
-        for params in enqueue:
-            study.enqueue_trial(params)
-
-        if is_multi:
-            # Multi-objective: Pareto-knee metric line every N trials, no bar.
-            study.optimize(
-                functools.partial(self._objective, prepared=prepared, masks=masks),
-                n_trials=self.n_trials, n_jobs=1,
-                show_progress_bar=False, callbacks=[_progress_cb],
-            )
-        elif is_parallel:
-            # Parallel worker: file-based progress for the parent to poll.
-            study.optimize(
-                functools.partial(self._objective, prepared=prepared, masks=masks),
-                n_trials=self.n_trials, n_jobs=1,
-                show_progress_bar=False, callbacks=[_file_progress_cb],
-            )
-        else:
-            # Sequential single-objective (1 or N seeds): real tqdm bar, one per
-            # seed in turn, labelled with the seed and updating best-so-far.
-            # Plain-text tqdm (not tqdm.auto): widget bars depend on the
-            # frontend's ipywidgets renderer, which VS Code notebooks
-            # intermittently fail to connect.  Text bars render everywhere.
-            from tqdm import tqdm
-            desc = (f"seed {seed} ({si + 1}/{n_seeds})"
-                    if n_seeds > 1 else "calibrating")
-            bar = tqdm(total=self.n_trials, desc=desc, leave=True)
-
-            def _bar_cb(study, trial):
-                bar.update(1)
-                try:
-                    bar.set_postfix_str(f"best {label}={study.best_value:.3f}")
-                except ValueError:
-                    pass
-
-            try:
-                study.optimize(
-                    functools.partial(self._objective, prepared=prepared, masks=masks),
-                    n_trials=self.n_trials, n_jobs=1,
-                    show_progress_bar=False, callbacks=[_bar_cb],
-                )
-            finally:
-                bar.close()
-        best_trial = (
-            self._select_best_multi(study.best_trials)
-            if is_multi else study.best_trial
-        )
-        score = self._study_score(best_trial)
-        if n_seeds > 1:
-            print(
-                f"  [done {si + 1}/{n_seeds}]  seed={seed}  {self.objective_mode}={score:.3f}",
-                flush=True,
-            )
-        return (seed, score, best_trial, study)
-
-    # -----------------------------------------------------------------------
-    # Sampler construction
-    # -----------------------------------------------------------------------
-
-    def _make_sampler(self, seed: int = 42) -> optuna.samplers.BaseSampler:
-        """
-        Instantiate the Optuna sampler.
-
-        Multi-objective mode always forces NSGA-II because TPE and CMA-ES are
-        single-objective samplers that error on multiple directions.
-
-        ``seed`` controls the sampler's pseudo-random stream.  CMA-ES with a
-        single fixed seed is fully deterministic but basin-sensitive: a tiny
-        change in the area-scaled start point can route the (otherwise
-        reproducible) search into a worse local optimum.  Running several
-        seeds and keeping the best (see ``multi_start`` in ``optimize()``)
-        makes the result robust to that fragility without relying on a lucky
-        start.  Note: Optuna >=4.4 turned ``CmaEsSampler(restart_strategy=...)``
-        into a no-op (deprecated, moved to OptunaHub), so multi-seed is the
-        in-core way to escape local basins here.
-        """
-        if self._is_multi or self._sampler_key == "nsgaii":
-            return optuna.samplers.NSGAIISampler(
-                population_size=self.n_startup, seed=seed
-            )
-        if self._sampler_key == "tpe":
-            return optuna.samplers.TPESampler(
-                n_startup_trials=self.n_startup,
-                seed=seed,
-                multivariate=True,
-                group=True,
-            )
-        if self._sampler_key == "cma-es":
-            return optuna.samplers.CmaEsSampler(
-                n_startup_trials=self.n_startup, seed=seed
-            )
-        raise ValueError(
-            f"Sampler {self.sampler_type!r} is not an Optuna sampler. "
-            "Use optimize() which routes to the correct backend automatically."
-        )
-
-    # -----------------------------------------------------------------------
-    # sparsehydro solver path
+    # Solver-agnostic calibration
     # -----------------------------------------------------------------------
 
     def _optimize_sparsehydro(
-        self,
-        sc_forcing_cal: list[pd.DataFrame],
-        obs_cal: np.ndarray,
-        obs_mean: float,
-        obs_std: float,
-        obs_var: float,
-        **solver_kwargs,
+        self, sc_forcing_cal, obs_cal, obs_mean, obs_std, obs_var, **solver_kwargs,
     ) -> None:
-        """
-        Run calibration using sparsehydro's CalibrationProblem + solver API.
+        """Calibrate through the common solver API with isolated model state."""
+        from types import SimpleNamespace
+        from sparsehydro.calibration.solvers import (
+            NSGAIISolver, ScipySolver, ParticleSwarmSolver, PlatypusSolver,
+            PlatypusCmaEsSolver,
+        )
 
-        This path constructs a ``CalibrationProblem`` from the first
-        subcatchment template (the problem evaluates a *single* parameter
-        vector that is then broadcast to all subcatchments via BFI scaling
-        inside the evaluate closure), then hands it to the chosen sparsehydro
-        solver.  The sparsehydro library itself is not modified.
-
-        Results are stored in ``self.study`` (the ``CalibrationResult``
-        object), ``self.best_params``, and the ``cal_*`` metric attributes.
-
-        Parameters
-        ----------
-        sc_forcing_cal : list of DataFrame
-            One warm-up-padded forcing DataFrame per subcatchment.
-        obs_cal : np.ndarray
-            Observed flow array sliced to the calibration scoring window.
-        obs_mean, obs_std, obs_var : float
-            Pre-computed statistics of obs_cal.
-        **solver_kwargs
-            Extra keyword arguments forwarded to the solver constructor
-            (e.g. ``algorithm_class`` for sh_platypus, ``pop_size`` for
-            sh_nsga2).
-        """
-        # Import sparsehydro calibration classes lazily so that the library
-        # import does not fail if sparsehydro is not installed (the Optuna
-        # path would still work).
-        try:
-            from sparsehydro.calibration import (
-                CalibrationProblem,
-                KGE, NashSutcliffe, ConcordanceCorrelationCoefficient,
-                PBIAS, VolumeRelativeError, RMSE, MAE, MSE,
-                PeakWeightedMSE, LogNSE, IndexOfAgreement,
-            )
-            from sparsehydro.calibration.solvers import (
-                NSGAIISolver, ScipySolver,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "sparsehydro calibration module not found. "
-                "Ensure sparsehydro is installed in this environment."
-            ) from exc
-
-        # Map our objective registry keys to sparsehydro IObjective classes.
-        _SH_OBJ_MAP = {
-            "kge":                    KGE,
-            "nash_sutcliffe":         NashSutcliffe,
-            "nse":                    NashSutcliffe,
-            "ccc":                    ConcordanceCorrelationCoefficient,
-            "concordance_correlation_coefficient": ConcordanceCorrelationCoefficient,
-            "pbias":                  PBIAS,
-            "volume_relative_error":  VolumeRelativeError,
-            "rmse":                   RMSE,
-            "mae":                    MAE,
-            "mse":                    MSE,
-            "peak_weighted_mse":      PeakWeightedMSE,
-            "log_nse":                LogNSE,
-            "index_of_agreement":     IndexOfAgreement,
-        }
-        objectives = [_SH_OBJ_MAP[k]() for k in self._obj_keys]
-
-        param_meta  = self.model._param_meta
-        param_names = [name for name, *_ in param_meta]
-        r_sorted    = self._r_sorted
-        r_set       = set(r_sorted)
-        r3_mult     = self._r3_multiplier
-        has_bfi     = len(r3_mult) > 1
-        cal_start   = self._cal_start
-        cal_end     = self._cal_end
-
-        # ------------------------------------------------------------------
-        # Build a custom evaluate function that wraps our multi-subcatchment
-        # simulation.  CalibrationProblem calls this via its evaluate() path
-        # when we pass it as prepare_fn — but the cleanest integration is to
-        # subclass or use the column_map "predicted" callable.  We use a
-        # thin wrapper model that CalibrationProblem can call.
-        #
-        # Approach: pass a dummy EnsembleModel as the model, but override
-        # the "predicted" column_map entry with a callable that runs our
-        # full multi-SC simulation and returns the summed prediction array.
-        # The "observed" callable just returns obs_cal.
-        # ------------------------------------------------------------------
-
-        # Use the first template as the dummy model for CalibrationProblem.
-        # CalibrationProblem calls model.prepare(data) then model.predict();
-        # we intercept predict() via column_map so the dummy prepare() is a
-        # no-op and the real work happens in the predicted callable.
-        dummy_template = copy.deepcopy(self.model._templates[0])
-
-        # Capture everything the evaluate closure needs.
-        _templates     = self.model._templates
-        _sc_df         = self.model._sc_df
-        _sc_forcing    = sc_forcing_cal
-        _bc_cal        = self._bc_cal
-
-        def _predicted_fn(predict_df: pd.DataFrame) -> np.ndarray:
-            """
-            Called by CalibrationProblem after model.predict().
-            We ignore predict_df (it's from the dummy template) and instead
-            re-run the full multi-SC simulation with the current parameters
-            stored on the dummy_template.
-            """
-            # Reconstruct the parameter dict from the dummy template's
-            # current scalar parameter values (CalibrationProblem applied
-            # x to it via apply_parameter_values before calling predict).
-            params = {
-                name: float(dummy_template.get_scalar_parameter(name).value)
-                for name in param_names
+        problem = _RdiiCalibrationProblem(self, sc_forcing_cal)
+        if self._sampler_key == "cma-es":
+            defaults = {
+                name: float(self.model._templates[0].get_scalar_parameter(name).value)
+                if name in self.model._templates[0].scalar_parameter_names else (lo + hi) / 2
+                for name, lo, hi, _ in self.model._param_meta
             }
-
-            # Physical gate: R sum > 1 is infeasible.
-            total_r = sum(params[n] for n in r_sorted)
-            if total_r > 1.0:
-                return np.full(len(obs_cal), np.nan)
-
-            r_vals       = [params[n] for n in r_sorted]
-            shape_params = {k: v for k, v in params.items() if k not in r_set}
-            # Upstream BC inflow baseline (constant across evaluations).
-            if _bc_cal is not None:
-                total_pred = _bc_cal.copy()
-            else:
-                total_pred = np.zeros(len(obs_cal))
-
-            for template, sc_row, df_wu in zip(_templates, _sc_df.itertuples(), _sc_forcing):
-                sc_name = sc_row.name
-                if has_bfi and len(r_sorted) >= 3:
-                    r3_i      = r_vals[-1] * r3_mult.get(sc_name, 1.0)
-                    sc_r_vals = r_vals[:-1] + [r3_i]
-                else:
-                    sc_r_vals = r_vals
-
-                if sum(sc_r_vals) > 1.0:
-                    return np.full(len(obs_cal), np.nan)
-
-                m = copy.deepcopy(template)
-                m.apply_parameter_values(shape_params)
-                m.apply_parameter_values(
-                    {name: val for name, val in zip(r_sorted, sc_r_vals)}
-                )
-                m.prepare(df_wu)
-                pred_full = m.predict()
-
-                cal_mask = (
-                    (pred_full["datetime"] >= cal_start)
-                    & (pred_full["datetime"] <= cal_end)
-                )
-                total_pred += pred_full.loc[cal_mask, "rdii_cfs"].to_numpy()
-
-            return total_pred
-
-        column_map = {
-            "observed":  lambda _: obs_cal,
-            "predicted": _predicted_fn,
-        }
-
-        problem = CalibrationProblem(
-            model      = dummy_template,
-            data       = sc_forcing_cal[0],   # dummy — real data used in _predicted_fn
-            objectives = objectives,
-            column_map = column_map,
-        )
-
-        # ------------------------------------------------------------------
-        # Instantiate the chosen sparsehydro solver.
-        # n_trials maps to the solver's primary iteration budget parameter.
-        # ------------------------------------------------------------------
-        try:
-            if self._sampler_key == "scipy":
-                solver = ScipySolver(
-                    method    = solver_kwargs.pop("method", "differential_evolution"),
-                    maxiter   = self.n_trials,
-                    seed      = 42,
-                    verbose   = solver_kwargs.pop("verbose", False),
-                    **solver_kwargs,
-                )
-            elif self._sampler_key == "sh_nsga2":
-                pop_size = solver_kwargs.pop("pop_size", self.n_startup)
-                solver = NSGAIISolver(
-                    pop_size = pop_size,
-                    n_gen    = self.n_trials,
-                    seed     = 42,
-                    n_jobs   = solver_kwargs.pop("n_jobs", 1),
-                    verbose  = solver_kwargs.pop("verbose", False),
-                    **solver_kwargs,
-                )
-            elif self._sampler_key in ("sh_pso", "sh_platypus"):
-                try:
-                    from sparsehydro.calibration.solvers import (
-                        ParticleSwarmSolver, PlatypusSolver,
-                    )
-                except ImportError as exc:
-                    raise ImportError(
-                        "platypus-opt is required for 'sh_pso' and 'sh_platypus'. "
-                        "Install it with: pip install platypus-opt"
-                    ) from exc
-
-                if self._sampler_key == "sh_pso":
-                    solver = ParticleSwarmSolver(
-                        swarm_size    = solver_kwargs.pop("swarm_size", self.n_startup),
-                        n_evaluations = self.n_trials,
-                        seed          = 42,
-                        **solver_kwargs,
-                    )
-                else:
-                    alg_cls = solver_kwargs.pop("algorithm_class", None)
-                    if alg_cls is None:
-                        raise ValueError(
-                            "sh_platypus requires algorithm_class=<platypus.Algorithm> "
-                            "passed as a keyword argument to optimize()."
-                        )
-                    solver = PlatypusSolver(
-                        algorithm_class = alg_cls,
-                        n_evaluations   = self.n_trials,
-                        seed            = 42,
-                        **solver_kwargs,
-                    )
-            else:
-                raise ValueError(f"Unrecognised sparsehydro sampler key: {self._sampler_key!r}")
-
-        except Exception:
-            raise
-
-        # Run the solver — this is the expensive step.
-        print(
-            f"[sparsehydro/{self.sampler_type}]  "
-            f"objectives={self.objective_mode}  "
-            f"n_trials≈{self.n_trials}  "
-            f"({len(param_names)} params, {len(self._obj_keys)} objective(s))"
-        )
-        result = solver.solve(problem)
-        self.study = result   # store CalibrationResult on self.study
-
-        # ------------------------------------------------------------------
-        # Extract best parameter vector.
-        # For single-objective: result.pareto_X has exactly one solution.
-        # For multi-objective: pick the knee using the same _select_best_multi
-        # logic — we reconstruct a lightweight object with user_attrs.
-        # ------------------------------------------------------------------
-        obj_names  = result.objective_names        # sparsehydro display names
-        disp_vals  = result.objective_display_values()  # un-negated (n_sol × n_obj)
-
-        if result.pareto_X.shape[0] == 1:
-            best_x = result.pareto_X[0]
+            initial = [problem.to_search(defaults)] if self.seed_initial else []
+            warmstart = getattr(self, "_warmstart_params", None)
+            if warmstart:
+                unknown = set(warmstart) - set(problem.param_names)
+                if unknown:
+                    raise ValueError(f"Unknown warm-start parameters: {sorted(unknown)}")
+                initial.append(problem.to_search({**defaults, **warmstart}))
+            solver = PlatypusCmaEsSolver(
+                objective_index=0, n_trials=self.n_trials,
+                offspring_size=solver_kwargs.pop("offspring_size", self.n_startup),
+                seeds=self._seeds, progress_every=self.progress_every,
+                initial_points=initial or None, **solver_kwargs,
+            )
+        elif self._sampler_key == "scipy":
+            solver = ScipySolver(
+                method=solver_kwargs.pop("method", "differential_evolution"),
+                maxiter=self.n_trials, seed=42, **solver_kwargs,
+            )
+        elif self._sampler_key == "sh_nsga2":
+            solver = NSGAIISolver(
+                pop_size=solver_kwargs.pop("pop_size", self.n_startup),
+                n_gen=self.n_trials, seed=42, **solver_kwargs,
+            )
+        elif self._sampler_key == "sh_pso":
+            solver = ParticleSwarmSolver(
+                swarm_size=solver_kwargs.pop("swarm_size", self.n_startup),
+                n_evaluations=self.n_trials, seed=42, **solver_kwargs,
+            )
+        elif self._sampler_key == "sh_platypus":
+            algorithm = solver_kwargs.pop("algorithm_class", None)
+            if algorithm is None:
+                raise ValueError("sh_platypus requires algorithm_class=<platypus.Algorithm>")
+            solver = PlatypusSolver(
+                algorithm_class=algorithm, n_evaluations=self.n_trials,
+                seed=42, **solver_kwargs,
+            )
         else:
-            # Build simple namespace objects so _select_best_multi can work.
-            class _FakeTrial:
-                def __init__(self, x, f_row):
-                    self.params = {n: float(x[i]) for i, n in enumerate(result.param_names)}
-                    # Populate user_attrs with our registry keys for knee selection.
-                    self.user_attrs = {}
-                    for obj_key in self._obj_keys_ref:
-                        reg_display = OBJECTIVE_REGISTRY[obj_key][2]
-                        for j, sh_name in enumerate(obj_names):
-                            if sh_name.lower().replace("_", "") == reg_display.lower().replace("_", "") \
-                               or obj_key in sh_name.lower():
-                                self.user_attrs[obj_key] = float(f_row[j])
-                                break
+            raise ValueError(f"Unrecognised sampler: {self._sampler_key!r}")
 
-            # Inject reference so the inner class can see _obj_keys.
-            _FakeTrial._obj_keys_ref = self._obj_keys
-            fake_trials = [_FakeTrial(result.pareto_X[i], disp_vals[i])
-                           for i in range(result.pareto_X.shape[0])]
-            best_fake = self._select_best_multi(fake_trials)
-            best_x    = result.pareto_X[
-                fake_trials.index(best_fake) if best_fake in fake_trials else 0
+        print(f"[sparsehydro/{self.sampler_type}] objectives={self.objective_mode} "
+              f"n_trials={self.n_trials} ({problem.n_params} params)")
+        result = solver.solve(problem)
+        self.seed_screen = []
+        self.seed_selection_note = ""
+        if self._sampler_key == "cma-es":
+            candidates = [
+                (entry["seed"],
+                 entry["opt_value"] * (-1 if problem.minimize_flags[0] else 1),
+                 SimpleNamespace(params=dict(zip(problem.param_names, problem.to_physical(entry["x"])))),
+                 result)
+                for entry in solver.seed_solutions_
             ]
-
-        self.best_params = {n: float(v) for n, v in zip(result.param_names, best_x)}
-
-        # ------------------------------------------------------------------
-        # Compute and store calibration metrics from the best solution.
-        # ------------------------------------------------------------------
+            if len(candidates) > 1 and (self.seed_selection in _SCREENED_SELECTIONS
+                                         or self.seed_override is not None):
+                selected, self.seed_screen, self.seed_selection_note = self._screen_seeds(
+                    candidates, sc_forcing_cal)
+            else:
+                selected = max(range(len(candidates)), key=lambda i: candidates[i][1])
+            self.best_seed, _, best, _ = candidates[selected]
+            best_x = problem.to_search(best.params)
+            result.pareto_X = best_x.reshape(1, -1)
+            result.pareto_F = problem.evaluate(best_x).reshape(1, -1)
+        else:
+            display = result.objective_display_values()
+            candidates = [
+                SimpleNamespace(params=dict(zip(problem.param_names, problem.to_physical(x))),
+                                user_attrs=dict(zip(problem.objective_names, f)))
+                for x, f in zip(result.pareto_X, display)
+            ]
+            best = self._select_best_multi(candidates)
+            if best is None:
+                raise RuntimeError("Calibration produced no selectable solution")
+        self.best_params = dict(best.params)
+        if sum(self.best_params[name] for name in self._r_sorted) > 1:
+            raise RuntimeError("Calibration selected physically infeasible watershed R fractions")
+        # Public diagnostics and saved parameters always use physical units.
+        result.pareto_X = problem.to_physical(result.pareto_X)
+        result.history = [
+            record._replace(X=problem.to_physical(record.X)) for record in result.history
+        ]
+        self.study = result
+        self.studies = [result]
+        self.best_trial = None
         total_best = self._simulate_cal(self.best_params, sc_forcing_cal)
-        if total_best is not None:
-            self.cal_ccc   = float(_fast_ccc(obs_cal, total_best, obs_mean, obs_var))
-            self.cal_kge   = float(_kge(obs_cal, total_best, obs_mean, obs_std))
-            self.cal_nse   = float(_nse(obs_cal, total_best))
-            self.cal_pbias = float(_pbias(obs_cal, total_best)) * 100.0
+        if total_best is None:
+            raise RuntimeError("Calibration selected physically infeasible R fractions")
+        self.cal_ccc = float(_fast_ccc(obs_cal, total_best, obs_mean, obs_var))
+        self.cal_kge = float(_kge(obs_cal, total_best, obs_mean, obs_std))
+        self.cal_nse = float(_nse(obs_cal, total_best))
+        self.cal_pbias = float(_pbias(obs_cal, total_best)) * 100
         self._store_selected_diagnostics(sc_forcing_cal)
 
     # -----------------------------------------------------------------------
@@ -2328,7 +1912,7 @@ class CalOptimizer:
         Parameters
         ----------
         trials : list
-            Optuna Pareto-front trials (``study.best_trials``).
+            Pareto candidates with params and user_attrs.
         """
         valid = [t for t in trials if t.user_attrs]
         if not valid:
@@ -2375,20 +1959,15 @@ class CalOptimizer:
     def optimize(self, n_jobs: int = 1, allow_parallel_in_kernel: bool = True,
                  **solver_kwargs) -> None:
         """
-        Run calibration using the configured backend (Optuna or sparsehydro).
+        Run calibration with the selected sparsehydro solver.
 
         This method:
 
         1. Builds sparsehydro model templates (via ``RdiiModel._build_templates``)
            if not already built.
         2. Pre-slices all forcing DataFrames for the calibration window + warm-up.
-        3. Branches on ``_backend``:
-
-           - **Optuna**: creates an Optuna study, optionally seeds the initial
-             trial, runs ``study.optimize()``.
-           - **sparsehydro**: constructs a ``CalibrationProblem`` with a custom
-             evaluate closure (handles BFI scaling + window slicing), then calls
-             the chosen sparsehydro solver.
+        3. Evaluates isolated multi-subcatchment model copies through the
+           selected solver, preserving physical gates and BFI/lag scaling.
 
         4. Selects the best solution and populates ``best_params`` and
            ``cal_ccc / cal_kge / cal_nse / cal_pbias``.
@@ -2399,13 +1978,13 @@ class CalOptimizer:
             Number of multi-start SEEDS to run concurrently (default 1).  With
             multi_start > 1 and n_jobs > 1, that many CMA-ES seeds run in
             parallel as separate PROCESSES (joblib/loky), each with its own
-            isolated prepared models; each study itself stays single-threaded.
+            isolated prepared models; each seed itself stays single-threaded.
             Processes (not threads) are used because the hot path is a
             pure-Python loop that holds the GIL, so threads give no speedup;
             processes deliver ~Nx (e.g. ~3x on 4 seeds, minus spawn/pickle
             overhead).  This replaces the old per-trial parallelism, which was
             a net loss for the fast objective.  n_jobs is capped at the number
-            of seeds.  Ignored for the sparsehydro backend (per-solver).
+            of seeds. Other solvers use their own worker options.
         allow_parallel_in_kernel : bool
             Default True: parallelise seeds (n_jobs > 1) even inside a
             Jupyter/IPython kernel.  Set False as an escape hatch to force
@@ -2485,270 +2064,15 @@ class CalOptimizer:
                     flush=True,
                 )
 
-        # ---- Persistent prepared models (fast path) -------------------------
-        # prepare() depends only on the forcing data, which is constant across
-        # trials; predict() re-reads parameters via _sync_from_params().  So we
-        # deep-copy + prepare each subcatchment template ONCE instead of every
-        # trial, eliminating the per-trial deepcopy+prepare cost that dominates
-        # multi-SC runtime.  The models carry mutable state, so each concurrent
-        # multi-start seed needs its OWN set: with n_jobs == 1 we build one
-        # shared set on self; with n_jobs > 1 each seed builds its own inside
-        # _run_seed() (below).  The legacy "per-trial deepcopy" fallback in
-        # _simulate_cal is no longer used by the Optuna path.
-        n_seeds_total = len(self._seeds)
-        parallel_seeds = n_jobs > 1 and n_seeds_total > 1
-        # loky child-process spawn parallelises seeds in a Jupyter kernel too
-        # (verified working here).  It CAN destabilise an embedded kernel on
-        # some setups, so allow_parallel_in_kernel=False is the escape hatch to
-        # force sequential in a notebook.  Scripts/terminals always parallelise.
-        if parallel_seeds and _in_jupyter_kernel() and not allow_parallel_in_kernel:
-            parallel_seeds = False
-            print(
-                f"  [multi-start] n_jobs={n_jobs} requested, but "
-                f"allow_parallel_in_kernel=False — running SEQUENTIAL seeds in "
-                f"this Jupyter kernel.",
-                flush=True,
-            )
-        self._prepared_models = None
-        self._cal_masks = None
-        if not parallel_seeds:
-            self._prepared_models, self._cal_masks = (
-                self._build_prepared_models(sc_forcing_cal)
-            )
-
-        param_meta = self.model._param_meta
-
-        # Capture common arrays used by both backends.
-        obs_cal  = self._obs_cal
-        obs_mean = self._obs_cal_mean
-        obs_var  = self._obs_cal_var
-        obs_std  = self._obs_cal_std
-
-        # ---- Branch: sparsehydro backend -----------------------------------
-        if self._backend == "sparsehydro":
-            self._optimize_sparsehydro(
-                sc_forcing_cal = sc_forcing_cal,
-                obs_cal        = obs_cal,
-                obs_mean       = obs_mean,
-                obs_std        = obs_std,
-                obs_var        = obs_var,
-                **solver_kwargs,
-            )
-            return
-
-        # ---- Optuna backend (below) ----------------------------------------
-        is_multi = self._is_multi
-
-        # Stash the per-run forcing so the seed runner (which may execute in a
-        # separate process under joblib) can rebuild its prepared models from
-        # self alone.  The Optuna objective is the bound method self._objective.
-        self._sc_forcing_cal = sc_forcing_cal
-
-        # ---- Study scaffolding (seed-independent) --------------------------
-        study_name = (
-            f"rdii_{self.model.name}_{self.objective_mode.lower().replace('+', '_')}"
+        self._prepared_models, self._cal_masks = self._build_prepared_models(sc_forcing_cal)
+        if self._sampler_key == "cma-es":
+            solver_kwargs["n_jobs"] = n_jobs
+            solver_kwargs["allow_parallel_in_kernel"] = allow_parallel_in_kernel
+        self._optimize_sparsehydro(
+            sc_forcing_cal=sc_forcing_cal, obs_cal=self._obs_cal,
+            obs_mean=self._obs_cal_mean, obs_std=self._obs_cal_std,
+            obs_var=self._obs_cal_var, **solver_kwargs,
         )
-
-        if is_multi:
-            directions = [
-                "minimize" if OBJECTIVE_REGISTRY[k][1] else "maximize"
-                for k in self._obj_keys
-            ]
-            create_kwargs = dict(directions=directions, study_name=study_name)
-        else:
-            direction = "minimize" if OBJECTIVE_REGISTRY[self._obj_keys[0]][1] else "maximize"
-            create_kwargs = dict(direction=direction, study_name=study_name)
-
-        # RTKInitializer seed point + any warm-start params, enqueued as the
-        # first trial(s) of every study so each seed starts from the same
-        # physically reasonable point rather than a random draw.
-        enqueue = []
-        if self.seed_initial:
-            enqueue.append({
-                name: float(
-                    self.model._templates[0].get_scalar_parameter(name).value
-                )
-                for name, _, _, _ in param_meta
-            })
-        _ws = getattr(self, "_warmstart_params", None)
-        if _ws:
-            valid_names = {name for name, *_ in param_meta}
-            enqueue.append({k: v for k, v in _ws.items() if k in valid_names})
-
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-        # ---- Multi-seed ensemble --------------------------------------------
-        # Each seed is an independent CMA-ES run from the same enqueued start.
-        # CMA-ES is basin-sensitive (see _make_sampler), so we keep the global
-        # best across seeds rather than trusting any single trajectory.
-        #
-        # Parallelism is ACROSS SEEDS, not across trials within a study.  The
-        # hot path (sparsehydro's pure-Python IA excess loop) holds the GIL, so
-        # threads give no speedup; we use PROCESSES via joblib/loky.  n_jobs > 1
-        # runs that many seeds in separate processes (true parallelism).  Each
-        # study runs single-threaded; each seed (re)builds its own prepared
-        # models, so their mutable state never collides.  The per-seed work is
-        # the picklable bound method self._run_one_seed (joblib serializes self
-        # with cloudpickle — the sparsehydro models contain lambdas that the
-        # stdlib pickler cannot handle, but cloudpickle can).
-        n_seeds = len(self._seeds)
-        seed_args = list(enumerate(self._seeds))
-
-        if parallel_seeds:
-            import tempfile, threading, time, shutil
-            from joblib import Parallel, delayed
-            workers = min(n_jobs, n_seeds)
-            print(
-                f"  [multi-start] running {n_seeds} seeds in {workers} processes",
-                flush=True,
-            )
-            # Workers (separate processes) can't stream stdout into a Jupyter
-            # cell, so they write best-so-far to per-seed files here; the parent
-            # polls and prints, which DOES reach every context (notebook +
-            # script + terminal).  Multi-objective has no single scalar to
-            # report this way, so it skips the file progress.
-            progress_dir = tempfile.mkdtemp(prefix="swmmrdii_progress_")
-            pdir = None if is_multi else progress_dir
-            holder = {}
-
-            def _dispatch():
-                # Capture ANY failure so the parent can re-raise it — an
-                # exception that dies inside this thread would otherwise
-                # surface only as an opaque KeyError('res') below.
-                try:
-                    holder["res"] = Parallel(n_jobs=workers, backend="loky")(
-                        delayed(self._run_one_seed)(si, seed, n_seeds, create_kwargs,
-                                                    enqueue, is_multi, True, pdir)
-                        for si, seed in seed_args
-                    )
-                except BaseException as exc:
-                    holder["err"] = exc
-
-            worker_thread = threading.Thread(target=_dispatch)
-            worker_thread.start()
-            try:
-                # Always print the current best for EVERY seed on each update,
-                # in stable seed order — a seed whose best hasn't improved still
-                # shows its standing best (not omitted).  We snapshot all seed
-                # files each poll and emit a block only when the snapshot
-                # changed, so identical blocks don't repeat every interval.
-                prev_snapshot = None
-                seeds_ordered = [seed for _, seed in seed_args]
-                while worker_thread.is_alive():
-                    worker_thread.join(timeout=3.0)
-                    if pdir is None:
-                        continue
-                    snapshot = {}
-                    for seed in seeds_ordered:
-                        try:
-                            with open(os.path.join(pdir, f"seed_{seed}.txt")) as fh:
-                                snapshot[seed] = fh.read().strip()
-                        except OSError:
-                            snapshot[seed] = ""   # not reported yet
-                    if snapshot == prev_snapshot or not any(snapshot.values()):
-                        continue
-                    prev_snapshot = snapshot
-                    # Pull trial count from whichever seed has the most recent
-                    # update (all seeds advance in lock-step so any non-empty
-                    # file gives the current iteration number).
-                    trial_n_str = ""
-                    obj_cells = []
-                    for seed in seeds_ordered:
-                        txt = snapshot[seed]
-                        if txt:
-                            tn, bv = txt.split()
-                            trial_n_str = f"{int(tn)}/{self.n_trials}"
-                            obj_cells.append(f"s{seed}={float(bv):.3f}")
-                        else:
-                            obj_cells.append(f"s{seed}=--")
-                    print(f"  [progress]  {trial_n_str}  " + "  ".join(obj_cells),
-                          flush=True)
-            finally:
-                worker_thread.join()
-                shutil.rmtree(progress_dir, ignore_errors=True)
-                # loky keeps its worker pool warm for reuse, so the worker
-                # processes stay alive after Parallel() returns.  In a script
-                # that's harmless, but in a Jupyter kernel the lingering
-                # children leave the cell showing "running" after the result is
-                # already in hand.  Explicitly tear the pool down so the cell
-                # settles cleanly.  kill_workers=True force-terminates them, so
-                # the shutdown itself can't stall waiting on a worker wedged in
-                # a teardown fault.  (loky's tiny resource_tracker process is
-                # intentionally persistent and is left alone — it's harmless.)
-                try:
-                    from joblib.externals.loky import get_reusable_executor
-                    get_reusable_executor().shutdown(wait=True, kill_workers=True)
-                except Exception:
-                    pass
-            if "err" in holder:
-                raise RuntimeError(
-                    "Parallel multi-start seed dispatch failed - see the chained "
-                    "exception below for the underlying worker error."
-                ) from holder["err"]
-            seed_results = holder["res"]
-        else:
-            seed_results = [
-                self._run_one_seed(si, seed, n_seeds, create_kwargs,
-                                   enqueue, is_multi, False)
-                for si, seed in seed_args
-            ]
-
-        self.studies = [r[3] for r in seed_results]
-
-        if n_seeds > 1:
-            seed_scores = "  ".join(
-                f"s{seed}={score:.3f}" for seed, score, _, _ in seed_results
-            )
-            print(f"  [results]  {seed_scores}", flush=True)
-
-        # Pick the winning seed; keep its study as the canonical self.study.
-        self.seed_screen = []
-        self.seed_selection_note = ""
-        # Every screening rule goes through _screen_seeds; only 'objective'
-        # skips it.  Listing the screening rules (rather than testing for one)
-        # keeps a newly added rule from silently falling through to the legacy
-        # branch.
-        if n_seeds > 1 and (self.seed_selection in _SCREENED_SELECTIONS
-                            or self.seed_override is not None):
-            # Screen on the calibration window and select the most robust
-            # seed rather than the highest search score.  Validation is never
-            # consulted here, so it stays a blind holdout.
-            win_idx, self.seed_screen, self.seed_selection_note = \
-                self._screen_seeds(seed_results, sc_forcing_cal)
-            best_seed, best_score, best, self.study = seed_results[win_idx]
-        else:
-            best_seed, best_score, best, self.study = max(
-                seed_results, key=lambda r: r[1]
-            )
-            if n_seeds > 1:
-                self.seed_selection_note = (
-                    f"seed_selection={self.seed_selection!r} — picked the best "
-                    f"search score; no robustness screening applied."
-                )
-                print(f"  [selection]  {self.seed_selection_note}", flush=True)
-        self.best_seed = best_seed
-        if n_seeds > 1:
-            print(f"  [selected]  seed {best_seed} "
-                  f"({self.objective_mode}={best_score:.4f})", flush=True)
-
-        self.best_trial  = best
-        self.best_params = dict(best.params)
-
-        # ---- Compute and store calibration metrics -------------------------
-        # Always compute CCC, KGE, NSE, PBIAS for the summary regardless of
-        # which objectives were used — they're cheap and always informative.
-        self.cal_ccc   = float(best.user_attrs.get("ccc",   float("nan")))
-        self.cal_kge   = float(best.user_attrs.get("kge",   float("nan")))
-        self.cal_pbias = float(best.user_attrs.get("pbias", float("nan"))) * 100.0
-
-        total_best = self._simulate_cal(self.best_params, sc_forcing_cal)
-        if total_best is not None:
-            self.cal_nse = float(_nse(obs_cal, total_best))
-            if np.isnan(self.cal_kge):
-                self.cal_kge = float(_kge(obs_cal, total_best, obs_mean, obs_std))
-            if np.isnan(self.cal_ccc):
-                self.cal_ccc = float(_fast_ccc(obs_cal, total_best, obs_mean, obs_var))
-        self._store_selected_diagnostics(sc_forcing_cal)
 
     # -----------------------------------------------------------------------
     # Warm-start from JSON
@@ -2756,32 +2080,26 @@ class CalOptimizer:
 
     def load_warmstart(self, json_path: str) -> None:
         """
-        Seed the Optuna study with parameters from a previously saved
+        Add initial CMA-ES evaluations from a previously saved
         ``best_params.json`` file.
 
         Must be called after ``set_windows()`` but before ``optimize()``.
-        The parameters are enqueued so Optuna evaluates them as the first
-        trial, giving it a head-start from the prior calibration.
+        Parameters are evaluated before the evolutionary search in every
+        CMA-ES seed and count against its budget. Other solvers do not use
+        these points; unknown or out-of-bounds parameters raise an error.
 
         Parameters
         ----------
         json_path : str
             Path to a JSON file in the format written by ``save_params()``.
         """
+        if self._sampler_key != "cma-es":
+            raise ValueError("load_warmstart is supported only by CMA-ES")
         with open(json_path, "r", encoding="utf-8") as f:
             payload = json.load(f)
 
-        if self.study is None:
-            # Store for use in optimize() when the study is created.
-            self._warmstart_params = payload.get("parameters", {})
-        else:
-            valid = {
-                k: v
-                for k, v in payload.get("parameters", {}).items()
-                if k in {name for name, *_ in self.model._param_meta}
-            }
-            self.study.enqueue_trial(valid)
-            print(f"Warm-start: enqueued {len(valid)} parameters from {json_path!r}")
+        self._warmstart_params = payload.get("parameters", {})
+        print(f"Warm-start: loaded {len(self._warmstart_params)} parameters from {json_path!r}")
 
     # -----------------------------------------------------------------------
     # Apply best parameters to a copy of each subcatchment template
@@ -3177,19 +2495,11 @@ class CalOptimizer:
         """
         Produce optimizer diagnostic plots appropriate for the active backend.
 
-        Works regardless of which sampler was used (Optuna or sparsehydro).
+        Works with every supported sampler.
         Returns a list of Plotly figures so the caller can display or further
         customise them.
 
-        **Optuna backend** produces up to three figures:
-
-        - *Optimization history* (single-objective) — best value vs trial.
-        - *Pareto front* (multi-objective) — scatter of all Pareto-front
-          trials; one panel per objective pair when there are >2 objectives.
-        - *Parameter importances* — fANOVA-based importance bar chart
-          (requires scikit-learn; skipped gracefully if not installed).
-
-        **sparsehydro backend** produces up to two figures:
+        Produces up to two figures:
 
         - *Convergence* — number of Pareto solutions per generation (or, for
           single-objective, best objective value per generation).
@@ -3203,9 +2513,8 @@ class CalOptimizer:
             String prepended to output filenames, e.g. the model name.
             Default ``''``.
         param_importances : bool
-            Whether to compute and show the fANOVA parameter importance chart
-            (Optuna backend only).  This can be slow for large studies (>5 000
-            trials); set ``False`` to skip it.  Default ``True``.
+            Retained for call compatibility. True emits a warning because
+            parameter-importance plots are unavailable. Default False.
 
         Returns
         -------
@@ -3216,6 +2525,10 @@ class CalOptimizer:
         """
         import plotly.graph_objects as go
         import plotly.express as px
+
+        if param_importances:
+            warnings.warn("Parameter importance plots are not supported by this solver backend",
+                          stacklevel=2)
 
         if self.study is None:
             raise RuntimeError("Run optimize() before calling plot_diagnostics().")
@@ -3231,176 +2544,123 @@ class CalOptimizer:
         obj_labels = [OBJECTIVE_REGISTRY[k][2] for k in self._obj_keys]
         title_base = f"{self.model.name or 'Model'} — {self.objective_mode} ({self.sampler_type})"
 
-        # ── Optuna backend ───────────────────────────────────────────────────
-        if self._backend == "optuna":
-            from optuna.visualization import (
-                plot_optimization_history,
-                plot_pareto_front,
+        result = self.study  # CalibrationResult object
+
+        # ── Convergence plot ─────────────────────────────────────────────
+        if result.history:
+            df_hist = result.to_pareto_dataframe()
+            # n_pareto per generation across all evaluated solutions.
+            gen_pareto = (
+                df_hist.groupby("generation")["is_pareto"]
+                .sum()
+                .reset_index()
+                .rename(columns={"is_pareto": "n_pareto"})
             )
-            # Param importances requires scikit-learn; import lazily.
-            try:
-                from optuna.visualization import plot_param_importances
-                _has_importances = True
-            except Exception:
-                _has_importances = False
-
-            study = self.study  # optuna.Study object
-
             if self._is_multi:
-                # Build human-readable target names from the objective registry.
-                target_names = [
-                    f"{lbl} ({'minimize' if OBJECTIVE_REGISTRY[k][1] else 'maximize'})"
-                    for k, lbl in zip(self._obj_keys, obj_labels)
-                ]
-                fig_p = plot_pareto_front(study, target_names=target_names)
-                fig_p.update_layout(
-                    title=f"{title_base} — Pareto Front",
-                    width=1000, height=700,
+                # Multi-objective: track Pareto front size over generations.
+                fig_c = go.Figure(
+                    go.Scatter(
+                        x=gen_pareto["generation"],
+                        y=gen_pareto["n_pareto"],
+                        mode="lines+markers",
+                        name="Pareto solutions",
+                    )
                 )
-                _save(fig_p, "optuna_pareto.html")
-            else:
-                fig_h = plot_optimization_history(study)
-                fig_h.update_layout(
-                    title=f"{title_base} — Optimization History",
+                fig_c.update_layout(
+                    title=f"{title_base} — Pareto Front Size per Generation",
+                    xaxis_title="Generation",
+                    yaxis_title="# Pareto solutions",
                     width=1200, height=500,
                 )
-                _save(fig_h, "optuna_history.html")
-
-            if _has_importances and param_importances:
-                try:
-                    from optuna.importance import FanovaImportanceEvaluator
-                    # fANOVA is O(n²) — cap the sample used for the random forest
-                    # so it stays fast regardless of trial count.
-                    evaluator = FanovaImportanceEvaluator(n_trees=64, max_depth=64, seed=0)
-                    fig_i = plot_param_importances(study, evaluator=evaluator)
-                    fig_i.update_layout(
-                        title=f"{title_base} — Parameter Importances",
-                        width=1000, height=600,
-                    )
-                    _save(fig_i, "optuna_importances.html")
-                except Exception:
-                    # fANOVA fails if scikit-learn is absent or too few trials.
-                    pass
-
-        # ── sparsehydro backend ──────────────────────────────────────────────
-        else:
-            result = self.study  # CalibrationResult object
-
-            # ── Convergence plot ─────────────────────────────────────────────
-            if result.history:
-                df_hist = result.to_pareto_dataframe()
-                # n_pareto per generation across all evaluated solutions.
-                gen_pareto = (
-                    df_hist.groupby("generation")["is_pareto"]
-                    .sum()
-                    .reset_index()
-                    .rename(columns={"is_pareto": "n_pareto"})
-                )
-                if self._is_multi:
-                    # Multi-objective: track Pareto front size over generations.
-                    fig_c = go.Figure(
-                        go.Scatter(
-                            x=gen_pareto["generation"],
-                            y=gen_pareto["n_pareto"],
-                            mode="lines+markers",
-                            name="Pareto solutions",
-                        )
-                    )
-                    fig_c.update_layout(
-                        title=f"{title_base} — Pareto Front Size per Generation",
-                        xaxis_title="Generation",
-                        yaxis_title="# Pareto solutions",
-                        width=1200, height=500,
-                    )
-                else:
-                    # Single-objective: track best objective value per generation.
-                    obj_name = result.objective_names[0]
-                    best_per_gen = (
-                        df_hist.groupby("generation")[obj_name]
-                        .min()
-                        .reset_index()
-                    )
-                    # Convert to display form if this is a maximise objective.
-                    if not result.minimize_flags[0]:
-                        best_per_gen[obj_name] = -best_per_gen[obj_name]
-                    fig_c = go.Figure(
-                        go.Scatter(
-                            x=best_per_gen["generation"],
-                            y=best_per_gen[obj_name],
-                            mode="lines+markers",
-                            name=obj_name,
-                        )
-                    )
-                    fig_c.update_layout(
-                        title=f"{title_base} — Best {obj_labels[0]} per Generation",
-                        xaxis_title="Generation",
-                        yaxis_title=obj_labels[0],
-                        width=1200, height=500,
-                    )
-                _save(fig_c, "sh_convergence.html")
-
-            # ── Pareto / solution plot ───────────────────────────────────────
-            disp = result.objective_display_values()   # (n_sol, n_obj), un-negated
-            n_obj = len(result.objective_names)
-
-            if n_obj == 1:
-                # Single-objective: bar chart of the one solution's metrics.
-                met_names = ["CCC", "KGE", "NSE", "PBIAS (%)"]
-                met_vals  = [self.cal_ccc, self.cal_kge, self.cal_nse, self.cal_pbias]
-                fig_s = go.Figure(
-                    go.Bar(x=met_names, y=met_vals, marker_color="#4C72B0")
-                )
-                fig_s.update_layout(
-                    title=f"{title_base} — Calibration Metrics",
-                    yaxis_title="Value",
-                    width=700, height=450,
-                )
-                _save(fig_s, "sh_metrics.html")
-
-            elif n_obj == 2:
-                # Two-objective: scatter of Pareto front.
-                x_name, y_name = result.objective_names
-                x_lbl,  y_lbl  = obj_labels[0], obj_labels[1]
-                fig_pf = go.Figure(
-                    go.Scatter(
-                        x=disp[:, 0], y=disp[:, 1],
-                        mode="markers",
-                        marker=dict(size=8, color="#4C72B0"),
-                        text=[f"sol {i}" for i in range(len(disp))],
-                    )
-                )
-                # Mark the selected best solution.
-                best_x = np.array([
-                    self.best_params[n] for n in result.param_names
-                ])
-                # Find the matching row in pareto_X.
-                dists = np.linalg.norm(result.pareto_X - best_x, axis=1)
-                bi = int(np.argmin(dists))
-                fig_pf.add_trace(go.Scatter(
-                    x=[disp[bi, 0]], y=[disp[bi, 1]],
-                    mode="markers",
-                    marker=dict(size=14, color="red", symbol="star"),
-                    name="Selected",
-                ))
-                fig_pf.update_layout(
-                    title=f"{title_base} — Pareto Front",
-                    xaxis_title=x_lbl,
-                    yaxis_title=y_lbl,
-                    width=900, height=650,
-                )
-                _save(fig_pf, "sh_pareto.html")
-
             else:
-                # 3+ objectives: scatter matrix of all objective pairs.
-                import pandas as _pd
-                df_pf = _pd.DataFrame(disp, columns=obj_labels)
-                fig_sm = px.scatter_matrix(
-                    df_pf,
-                    dimensions=obj_labels,
-                    title=f"{title_base} — Pareto Front (scatter matrix)",
+                # Single-objective: track best objective value per generation.
+                obj_name = result.objective_names[0]
+                minimize = result.minimize_flags[0]
+                best_per_gen = (
+                    df_hist.groupby("generation")[obj_name]
+                    .agg("min" if minimize else "max")
+                    .reset_index()
                 )
-                fig_sm.update_layout(width=1000, height=1000)
-                _save(fig_sm, "sh_pareto_matrix.html")
+                values = best_per_gen[obj_name]
+                best_per_gen[obj_name] = values.cummin() if minimize else values.cummax()
+                fig_c = go.Figure(
+                    go.Scatter(
+                        x=best_per_gen["generation"],
+                        y=best_per_gen[obj_name],
+                        mode="lines+markers",
+                        name=obj_name,
+                    )
+                )
+                fig_c.update_layout(
+                    title=f"{title_base} — Best {obj_labels[0]} per Generation",
+                    xaxis_title="Generation",
+                    yaxis_title=obj_labels[0],
+                    width=1200, height=500,
+                )
+            _save(fig_c, "sh_convergence.html")
+
+        # ── Pareto / solution plot ───────────────────────────────────────
+        disp = result.objective_display_values()   # (n_sol, n_obj), un-negated
+        n_obj = len(result.objective_names)
+
+        if n_obj == 1:
+            # Single-objective: bar chart of the one solution's metrics.
+            met_names = ["CCC", "KGE", "NSE", "PBIAS (%)"]
+            met_vals  = [self.cal_ccc, self.cal_kge, self.cal_nse, self.cal_pbias]
+            fig_s = go.Figure(
+                go.Bar(x=met_names, y=met_vals, marker_color="#4C72B0")
+            )
+            fig_s.update_layout(
+                title=f"{title_base} — Calibration Metrics",
+                yaxis_title="Value",
+                width=700, height=450,
+            )
+            _save(fig_s, "sh_metrics.html")
+
+        elif n_obj == 2:
+            # Two-objective: scatter of Pareto front.
+            x_name, y_name = result.objective_names
+            x_lbl,  y_lbl  = obj_labels[0], obj_labels[1]
+            fig_pf = go.Figure(
+                go.Scatter(
+                    x=disp[:, 0], y=disp[:, 1],
+                    mode="markers",
+                    marker=dict(size=8, color="#4C72B0"),
+                    text=[f"sol {i}" for i in range(len(disp))],
+                )
+            )
+            # Mark the selected best solution.
+            best_x = np.array([
+                self.best_params[n] for n in result.param_names
+            ])
+            # Find the matching row in pareto_X.
+            dists = np.linalg.norm(result.pareto_X - best_x, axis=1)
+            bi = int(np.argmin(dists))
+            fig_pf.add_trace(go.Scatter(
+                x=[disp[bi, 0]], y=[disp[bi, 1]],
+                mode="markers",
+                marker=dict(size=14, color="red", symbol="star"),
+                name="Selected",
+            ))
+            fig_pf.update_layout(
+                title=f"{title_base} — Pareto Front",
+                xaxis_title=x_lbl,
+                yaxis_title=y_lbl,
+                width=900, height=650,
+            )
+            _save(fig_pf, "sh_pareto.html")
+
+        else:
+            # 3+ objectives: scatter matrix of all objective pairs.
+            import pandas as _pd
+            df_pf = _pd.DataFrame(disp, columns=obj_labels)
+            fig_sm = px.scatter_matrix(
+                df_pf,
+                dimensions=obj_labels,
+                title=f"{title_base} — Pareto Front (scatter matrix)",
+            )
+            fig_sm.update_layout(width=1000, height=1000)
+            _save(fig_sm, "sh_pareto_matrix.html")
 
         return figs
 
@@ -3413,7 +2673,7 @@ class CalOptimizer:
         """
         Print a reference table of all available objective keys.
 
-        Shows the key to pass to the ``objective`` parameter, the Optuna
+        Shows the key to pass to the ``objective`` parameter, the calibration
         direction (maximize/minimize), the display name, and a short
         description.  Any single key can be used alone (single-objective)
         or combined in a list or ``'+'``-separated string (multi-objective
@@ -3480,14 +2740,8 @@ class CalOptimizer:
         """
         Print a reference table of all available sampler keys and their backends.
 
-        Two backends are supported:
-
-        - **Optuna** — trial-based search; progress bar built-in; warm-start
-          via ``load_warmstart()``; ``n_trials`` = number of function evaluations.
-        - **sparsehydro** — uses pymoo / scipy / platypus under the hood;
-          ``n_trials`` maps to the solver's primary iteration budget
-          (``maxiter`` for scipy, ``n_gen`` for sh_nsga2, ``n_evaluations``
-          for sh_pso / sh_platypus).
+        Solvers use pymoo, scipy or Platypus. CMA-ES counts model
+        evaluations per seed; sh_nsga2 counts generations. TPE is removed.
 
         Examples
         --------
@@ -3495,13 +2749,10 @@ class CalOptimizer:
 
         Usage::
 
-            CalOptimizer(model=m, sampler='CMA-ES', ...)        # Optuna
+            CalOptimizer(model=m, sampler='CMA-ES', ...)        # calibration
             CalOptimizer(model=m, sampler='scipy',  ...)        # sparsehydro
             CalOptimizer(model=m, sampler='sh_nsga2', ...)      # sparsehydro
         """
-        optuna_entries = [
-            (k, v) for k, v in SAMPLER_REGISTRY.items() if v[0] == "optuna"
-        ]
         sh_entries = [
             (k, v) for k, v in SAMPLER_REGISTRY.items() if v[0] == "sparsehydro"
         ]
@@ -3516,14 +2767,8 @@ class CalOptimizer:
 
         print("Available samplers:")
         print()
-        print("  -- Optuna backend ----------------------------------------------------------")
-        for k, v in optuna_entries:
-            _row(k, v)
-        print()
         print("  -- sparsehydro backend (pymoo / scipy / platypus) -----------------------")
         for k, v in sh_entries:
             _row(k, v)
         print()
-        print("  Multi-objective Pareto runs always force NSGA-II (Optuna) or the chosen")
-        print("  sparsehydro multi-objective solver. Single-objective samplers (CMA-ES,")
-        print("  TPE, scipy) raise an error if a list of objectives is passed.")
+        print("  NSGAII aliases use sh_nsga2. CMA-ES and scipy require one objective.")

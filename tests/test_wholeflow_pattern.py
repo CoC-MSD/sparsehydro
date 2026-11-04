@@ -406,8 +406,7 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
     from sparsehydro.calibration.objectives import PBIAS
 
     if scoring_mode == "single":
-        pytest.importorskip("optuna")
-        pytest.importorskip("cmaes")
+        pytest.importorskip("platypus")
     use_objective = "con15_error" in objective_names
     expected_names = objective_names
     cma_jobs = 2 if (scoring_mode == "single" and expected_names == ["ccc"]
@@ -426,7 +425,7 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
               SCORING_MODE=scoring_mode, MULTIOBJECTIVE_OBJECTIVES=objective_names,
               SINGLE_OBJECTIVE=objective_names[0], USE_TRAINING_PEAK_FILTER=use_filter,
               CMA_ES_SETTINGS={"cma_n_trials": 32, "cma_multi_start": 2, "cma_n_jobs": cma_jobs,
-                               "cma_seed": 42, "cma_startup_trials": 4, "cma_progress_every": 0},
+                               "cma_seed": 42, "cma_offspring_size": 4, "cma_progress_every": 0},
               CON15_FILTER_FRACTION=1., MAX_TRAINING_PEAK_ERROR=10.,
               ARTIFACT_DIR=tmp_path,
               msdgc_settings=MSDGCSettings(minimum_minutes=(60., 20., 30.),
@@ -608,7 +607,7 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
         assert "objective_definitions" not in metadata
         assert "report_metric_labels" not in metadata
         if scoring_mode == "single":
-            assert metadata["solver"] == "optuna.samplers.CmaEsSampler"
+            assert metadata["solver"] == "platypus.CMAES"
             assert metadata["requested_evaluations"] == 64
             assert metadata["trials_per_seed"] == 32
             assert metadata["multi_start"] == 2

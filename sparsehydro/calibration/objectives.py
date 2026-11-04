@@ -633,7 +633,7 @@ class DisjointWindowCCC(IObjective):
     Defined at package scope (not in a notebook cell) so ``cloudpickle`` can
     serialise a :class:`~sparsehydro.calibration.problem.CalibrationProblem`
     carrying it into ``loky`` worker processes — the prerequisite for the
-    multi-seed *parallel* CMA-ES path (``OptunaCmaEsSolver(n_jobs>1)``).
+    multi-seed *parallel* CMA-ES path (``PlatypusCmaEsSolver(n_jobs>1)``).
 
     :param dry_mask: Boolean mask selecting the dry (baseflow) scoring window.
     :param storm_mask: Boolean mask selecting the storm (peak) scoring window.

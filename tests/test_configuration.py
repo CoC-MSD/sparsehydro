@@ -217,7 +217,7 @@ def test_invalid_module_settings_fail_explicitly(kwargs):
     {"objectives": ("ccc", "ccc")}, {"objectives": ("typo",)},
     {"solver": "cmaes"}, {"solver": "differential_evolution"},
     {"scoring_mode": "single"}, {"population": True}, {"workers": 0},
-    {"scoring_mode": "single", "objectives": ("ccc",), "cma_trials": 2, "cma_startup_trials": 2},
+    {"scoring_mode": "single", "objectives": ("ccc",), "cma_trials": 2, "cma_offspring_size": 1},
 ])
 def test_invalid_solver_and_objective_settings_fail_explicitly(kwargs):
     with pytest.raises(ValueError):
@@ -284,7 +284,7 @@ def test_each_solver_executes_a_configured_core_model(method, n_triangles):
     config = CalibrationSettings(
         solver=method, scoring_mode="multiobjective" if method in ("nsga2", "spea2") else "single",
         objectives=("ccc", "nash_sutcliffe") if method in ("nsga2", "spea2") else ("nash_sutcliffe",),
-        population=8, generations=2, workers=2, cma_trials=8, cma_startup_trials=2,
+        population=8, generations=2, workers=2, cma_trials=8, cma_offspring_size=2,
         cma_starts=1, cma_jobs=1, cma_progress_every=0, de_maxiter=1, de_popsize=3)
     model = build(StudySettings(model=ModelSettings(n_triangles=n_triangles, seasonal_baseline="off"), calibration=config))
     for name in model.scalar_parameter_names:

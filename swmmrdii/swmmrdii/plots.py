@@ -89,7 +89,7 @@ def plot_timeseries(
         Example: ``{'Rainfall (in)': (rain_array, 'in')}``.
     pareto_predictions : np.ndarray or None
         2-D array of shape (N_top, N_timesteps) containing the top-N
-        predictions from the Optuna study.  When provided, the 5th–95th
+        predictions from the calibration study.  When provided, the 5th–95th
         percentile band is shaded as an uncertainty envelope.
     confidence_percentiles : (float, float)
         Lower and upper percentile bounds for the uncertainty band.

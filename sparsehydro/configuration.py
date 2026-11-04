@@ -125,7 +125,7 @@ class CalibrationSettings:
     cma_starts: int = 4
     cma_jobs: int = 1
     cma_seed: int = 42
-    cma_startup_trials: int = 10
+    cma_offspring_size: int = 10
     cma_progress_every: int = 200
     de_maxiter: int = 1000
     de_popsize: int = 15
@@ -162,10 +162,10 @@ class CalibrationSettings:
             _positive_integer("generations", self.generations)
             _positive_integer("workers", self.workers)
         elif self.resolved_solver == "cmaes":
-            for name in ("cma_trials", "cma_starts", "cma_jobs", "cma_startup_trials"):
+            for name in ("cma_starts", "cma_jobs"):
                 _positive_integer(name, getattr(self, name))
-            if self.cma_startup_trials >= self.cma_trials:
-                raise ValueError("CMA startup trials must be smaller than trials per seed")
+            for name in ("cma_trials", "cma_offspring_size"):
+                _positive_integer(name, getattr(self, name), minimum=2)
         else:
             _positive_integer("de_maxiter", self.de_maxiter)
             _positive_integer("de_popsize", self.de_popsize)
@@ -220,10 +220,10 @@ class CalibrationSettings:
                 seed=self.seed, n_workers=self.workers, callback=ProgressCallback(frequency=10),
             )
         if method == "cmaes":
-            from sparsehydro.calibration.solvers.optuna_solver import OptunaCmaEsSolver
-            return OptunaCmaEsSolver(
+            from sparsehydro.calibration.solvers.cmaes_solver import PlatypusCmaEsSolver
+            return PlatypusCmaEsSolver(
                 objective=self.objectives[0], n_trials=self.cma_trials,
-                n_startup_trials=self.cma_startup_trials, seed=self.cma_seed,
+                offspring_size=self.cma_offspring_size, seed=self.cma_seed,
                 multi_start=self.cma_starts, n_jobs=self.cma_jobs,
                 allow_parallel_in_kernel=True, progress_every=self.cma_progress_every,
             )
@@ -246,9 +246,9 @@ class CalibrationSettings:
         if method == "cmaes":
             workers = min(self.cma_jobs, self.cma_starts)
             return dict(
-                solver="optuna.samplers.CmaEsSampler", seed=self.cma_seed,
+                solver="platypus.CMAES", seed=self.cma_seed,
                 trials_per_seed=self.cma_trials, multi_start=self.cma_starts,
-                startup_trials=self.cma_startup_trials, calibration_workers=workers,
+                offspring_size=self.cma_offspring_size, calibration_workers=workers,
                 evaluation_backend="seed processes" if workers > 1 else "serial",
                 requested_evaluations=self.cma_trials * self.cma_starts,
             )

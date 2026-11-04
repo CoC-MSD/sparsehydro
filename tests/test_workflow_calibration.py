@@ -39,10 +39,10 @@ except ImportError:
     HAS_SCIPY = False
 
 try:
-    import optuna  # noqa: F401
-    HAS_OPTUNA = True
+    import platypus  # noqa: F401
+    HAS_PLATYPUS = True
 except ImportError:
-    HAS_OPTUNA = False
+    HAS_PLATYPUS = False
 
 
 # ---------------------------------------------------------------------------
@@ -844,21 +844,21 @@ class TestScipySolver(unittest.TestCase):
         self.assertEqual(result.pareto_X.shape[0], 1)
 
 
-@unittest.skipUnless(HAS_OPTUNA, "optuna not installed")
-class TestOptunaCmaEsSolver(unittest.TestCase):
+@unittest.skipUnless(HAS_PLATYPUS, "platypus not installed")
+class TestPlatypusCmaEsSolver(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from sparsehydro.calibration.solvers.optuna_solver import OptunaCmaEsSolver
-        cls.OptunaCmaEsSolver = OptunaCmaEsSolver
+        from sparsehydro.calibration.solvers.cmaes_solver import PlatypusCmaEsSolver
+        cls.PlatypusCmaEsSolver = PlatypusCmaEsSolver
         cls.problem, cls.observed, cls.slope, cls.intercept = \
             _make_linear_model_and_problem()
 
     def _solver(self, **kwargs):
-        opts = dict(n_trials=30, n_startup_trials=5, seed=0, n_jobs=1,
+        opts = dict(n_trials=30, offspring_size=5, seed=0, n_jobs=1,
                     progress_every=0, verbose=False)
         opts.update(kwargs)
-        return self.OptunaCmaEsSolver(**opts)
+        return self.PlatypusCmaEsSolver(**opts)
 
     def test_solve_returns_calibration_result(self):
         result = self._solver(objective_index=0).solve(self.problem)

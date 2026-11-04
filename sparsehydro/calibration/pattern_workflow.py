@@ -107,7 +107,7 @@ def study_settings_from_controls(controls: Mapping[str, Any]) -> StudySettings:
         population=nsga["pop_size"], generations=nsga["generations"], seed=nsga["seed"],
         workers=controls["CALIBRATION_WORKERS"], cma_trials=cma["cma_n_trials"],
         cma_starts=cma["cma_multi_start"], cma_jobs=cma["cma_n_jobs"], cma_seed=cma["cma_seed"],
-        cma_startup_trials=cma["cma_startup_trials"], cma_progress_every=cma["cma_progress_every"],
+        cma_offspring_size=cma["cma_offspring_size"], cma_progress_every=cma["cma_progress_every"],
         de_maxiter=de["de_maxiter"], de_popsize=de["de_popsize"], de_polish=de["de_polish"])
     names = ["s_max", "ia_k_dep", "ia_k0", "ia_kT", "ia_theta", "ia_T_ref", "ia_T_freeze", "area_acres"]
     if modules.groundwater_enabled:

@@ -6,7 +6,7 @@ models — ``GwiStoreModelB`` (Stage-1 GWI stores) and ``RTKOnFrozenExcess`` (St
 RTK on the frozen excess) — that ``flowfinity_gwi_wholeflow_eventmask.ipynb`` and the
 Stage-1 cell of the joint notebook use.  They all live in the package —
 rather than being defined in a notebook cell — for one concrete reason: the
-:class:`~sparsehydro.calibration.solvers.optuna_solver.OptunaCmaEsSolver` multi-seed
+:class:`~sparsehydro.calibration.solvers.cmaes_solver.PlatypusCmaEsSolver` multi-seed
 path runs each CMA-ES seed in a separate ``loky`` process, and ``cloudpickle`` can
 only serialise the problem (hence the model) into those workers when the model class
 is importable by qualified name.  A notebook-``__main__`` class cannot be pickled, so

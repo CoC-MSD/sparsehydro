@@ -69,8 +69,8 @@ Public API
      - Any Platypus algorithm (requires platypus-opt)
    * - :class:`ScipySolver`
      - SciPy single-objective (requires scipy)
-   * - :class:`OptunaCmaEsSolver`
-     - Single-objective CMA-ES, multi-seed / parallel (requires optuna)
+   * - :class:`PlatypusCmaEsSolver`
+     - Single-objective CMA-ES, multi-seed / parallel (uses platypus-opt)
 
 **Train / validation splits** (:mod:`~sparsehydro.calibration.splits`)
 
@@ -110,7 +110,7 @@ from .objectives import (
 )
 from .problem import CalibrationProblem
 from .result import CalibrationResult, GenerationRecord, _identify_pareto
-from .solvers import ISolver, NSGAIISolver, OptunaCmaEsSolver, ParticleSwarmSolver, PlatypusSolver, ScipySolver
+from .solvers import ISolver, NSGAIISolver, PlatypusCmaEsSolver, ParticleSwarmSolver, PlatypusSolver, ScipySolver
 from .splits import (
     SplitConfig,
     SplitMasks,
@@ -146,7 +146,7 @@ __all__ = [
     # Solvers
     "ISolver",
     "NSGAIISolver",
-    "OptunaCmaEsSolver",
+    "PlatypusCmaEsSolver",
     "ParticleSwarmSolver",
     "PlatypusSolver",
     "ScipySolver",

@@ -46,7 +46,7 @@ See the module docstrings for full API documentation.
 # Core workflow classes
 from .model import RdiiModel
 
-# Calibration is imported lazily to avoid pulling in optuna/joblib in
+# Calibration is imported lazily to avoid pulling in calibration/joblib in
 # environments where only the SWMM runner is needed (e.g. PCSWMM scripts).
 def __getattr__(name):
     if name in ("CalOptimizer", "OBJECTIVE_REGISTRY", "SAMPLER_REGISTRY"):
