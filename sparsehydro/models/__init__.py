@@ -23,6 +23,9 @@ from .amm import AMMModel
 from .ensemble import EnsembleModel
 from .seasonality import SeasonalityModel
 from .composite import AbstractionUHModel
+from .rdii.initial_abstraction import SnowConfig
+from .wholeflow_compact import CompactWholeFlowModel, SanitaryTemplate
+from .wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
 from .abstraction import (
     TankAbstractionModel,
     ConstantDrainTank,
@@ -37,6 +40,11 @@ __all__ = [
     "EnsembleModel",
     "SeasonalityModel",
     "AbstractionUHModel",
+    "SnowConfig",
+    "CompactWholeFlowModel",
+    "SanitaryTemplate",
+    "CenteredWeeklyPattern",
+    "PatternWholeFlowModel",
     "TankAbstractionModel",
     "ConstantDrainTank",
     "LinearDrainTank",

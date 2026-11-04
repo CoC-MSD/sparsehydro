@@ -1,4 +1,4 @@
-"""Tests for sparsehydro.calibration — unittest.TestCase.
+"""Migrated workflow calibration regressions using unittest.TestCase.
 
 Covers:
   - IObjective subclasses (MSE, RMSE, MAE, PeakWeightedMSE, NashSutcliffe, KGE)
@@ -16,19 +16,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from sparsehydro.calibration import (
-    IObjective,
-    KGE,
-    LogNSE,
-    MAE,
-    MSE,
-    RMSE,
-    CalibrationProblem,
-    CalibrationResult,
-    GenerationRecord,
-    NashSutcliffe,
-    PeakWeightedMSE,
-)
+from sparsehydro.calibration import IObjective, KGE, LogNSE, MAE, MSE, RMSE, CalibrationProblem, CalibrationResult, GenerationRecord, NashSutcliffe, PeakWeightedMSE
 from sparsehydro.calibration.result import _identify_pareto
 from sparsehydro.enums import ModelState
 from sparsehydro.models import IModel
@@ -49,6 +37,12 @@ try:
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
+
+try:
+    import platypus  # noqa: F401
+    HAS_PLATYPUS = True
+except ImportError:
+    HAS_PLATYPUS = False
 
 
 # ---------------------------------------------------------------------------
@@ -848,6 +842,53 @@ class TestScipySolver(unittest.TestCase):
         result = solver.solve(self.problem)
         self.assertIsInstance(result, CalibrationResult)
         self.assertEqual(result.pareto_X.shape[0], 1)
+
+
+@unittest.skipUnless(HAS_PLATYPUS, "platypus not installed")
+class TestPlatypusCmaEsSolver(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from sparsehydro.calibration.solvers.cmaes_solver import PlatypusCmaEsSolver
+        cls.PlatypusCmaEsSolver = PlatypusCmaEsSolver
+        cls.problem, cls.observed, cls.slope, cls.intercept = \
+            _make_linear_model_and_problem()
+
+    def _solver(self, **kwargs):
+        opts = dict(n_trials=30, offspring_size=5, seed=0, n_jobs=1,
+                    progress_every=0, verbose=False)
+        opts.update(kwargs)
+        return self.PlatypusCmaEsSolver(**opts)
+
+    def test_solve_returns_calibration_result(self):
+        result = self._solver(objective_index=0).solve(self.problem)
+        self.assertIsInstance(result, CalibrationResult)
+
+    def test_result_single_pareto_solution(self):
+        result = self._solver(objective_index=0).solve(self.problem)
+        self.assertEqual(result.pareto_X.shape[0], 1)
+
+    def test_result_objective_names_preserved(self):
+        result = self._solver(objective_index=0).solve(self.problem)
+        self.assertEqual(result.objective_names, ["mse", "nash_sutcliffe"])
+        self.assertEqual(result.minimize_flags, [True, False])
+
+    def test_objective_selected_by_name(self):
+        solver = self._solver(objective="nash_sutcliffe")
+        result = solver.solve(self.problem)
+        self.assertIsInstance(result, CalibrationResult)
+        self.assertEqual(solver.objective_optimized_, "nash_sutcliffe")
+
+    def test_unknown_objective_name_raises(self):
+        with self.assertRaises(ValueError):
+            self._solver(objective="not_an_objective").solve(self.problem)
+
+    def test_multi_seed_populates_seed_solutions(self):
+        solver = self._solver(objective="nash_sutcliffe", multi_start=2)
+        solver.solve(self.problem)
+        self.assertEqual(len(solver.seed_solutions_), 2)
+        self.assertIn(solver.selected_seed_, [s["seed"] for s in solver.seed_solutions_])
+        self.assertTrue(any(s["selected"] for s in solver.seed_solutions_))
 
 
 if __name__ == "__main__":

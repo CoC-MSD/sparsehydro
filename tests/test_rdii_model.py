@@ -11,8 +11,12 @@ Covers:
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import math
+import sys
 import unittest
+import unittest.mock
 
 import numpy as np
 import pandas as pd
@@ -23,6 +27,8 @@ from sparsehydro.models.rdii import (
     RTKTriangle,
     triangular_uh,
 )
+from sparsehydro.models.rdii import initial_abstraction as _ia_mod
+from sparsehydro.models.rdii.rtk_triangle import _integrate_triangle
 from sparsehydro.calibration.objectives import NashSutcliffe, PeakWeightedMSE
 
 # Convenience wrappers that match old function-call style used in TestObjectives
@@ -47,6 +53,9 @@ try:
     HAS_PLOTLY = True
 except ImportError:
     HAS_PLOTLY = False
+
+#: True when the numba JIT fast-path for the IA excess recurrence compiled.
+HAS_NUMBA = _ia_mod._HAS_NUMBA
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +498,205 @@ class TestTriangularUH(unittest.TestCase):
         tri = RTKTriangle(R=0.1, T=2.0, K=2.0)
         ords = triangular_uh(tri, dt_hours=1.0, n_steps=20)
         self.assertEqual(len(ords), 20)
+
+
+# ---------------------------------------------------------------------------
+# TestTriangularUHVectorization
+#
+# ``triangular_uh`` differences the closed-form cumulative integral
+# (``_triangle_cumint``) instead of looping per step.  These pin it against the
+# scalar trapezoid-with-breakpoints reference it replaced.
+# ---------------------------------------------------------------------------
+
+def _reference_uh(triangle: RTKTriangle, dt_hours: float,
+                  n_steps: int | None = None) -> np.ndarray:
+    """Per-bin scalar reference built on :func:`_integrate_triangle`."""
+    base = triangle.base_duration
+    if n_steps is None:
+        n_steps = math.ceil(base / dt_hours) + 1
+    ords = np.zeros(n_steps)
+    for i in range(n_steps):
+        t0 = min(i * dt_hours, base)
+        t1 = min((i + 1) * dt_hours, base)
+        ords[i] = _integrate_triangle(t0, t1, triangle.T, triangle.K) / dt_hours
+    return ords
+
+
+class TestTriangularUHVectorization(unittest.TestCase):
+
+    # K = 1.001 is the registered lower bound; base - T = T*K must stay non-zero.
+    # dt = 500 h is deliberately larger than `base` for the short triangles.
+    CASES = [
+        (T, K, dt)
+        for T in (0.5, 2.0, 12.0, 120.0)
+        for K in (1.001, 1.5, 3.0)
+        for dt in (5.0 / 60.0, 0.25, 1.0, 500.0)
+    ]
+
+    def test_matches_scalar_reference(self):
+        for T, K, dt in self.CASES:
+            with self.subTest(T=T, K=K, dt=dt):
+                tri = RTKTriangle(R=0.1, T=T, K=K)
+                np.testing.assert_allclose(
+                    triangular_uh(tri, dt_hours=dt),
+                    _reference_uh(tri, dt_hours=dt),
+                    rtol=1e-10, atol=1e-12,
+                )
+
+    def test_matches_scalar_reference_with_custom_n_steps(self):
+        """Explicit n_steps both shorter and longer than the natural support."""
+        tri = RTKTriangle(R=0.1, T=4.0, K=2.0)
+        for n_steps in (3, 13, 60):
+            with self.subTest(n_steps=n_steps):
+                np.testing.assert_allclose(
+                    triangular_uh(tri, dt_hours=1.0, n_steps=n_steps),
+                    _reference_uh(tri, dt_hours=1.0, n_steps=n_steps),
+                    rtol=1e-10, atol=1e-12,
+                )
+
+    def test_unit_area_tight(self):
+        """Full support integrates to 1 far tighter than the 1e-4 smoke test."""
+        for T, K, dt in self.CASES:
+            with self.subTest(T=T, K=K, dt=dt):
+                tri = RTKTriangle(R=0.1, T=T, K=K)
+                ords = triangular_uh(tri, dt_hours=dt)
+                np.testing.assert_allclose(np.sum(ords) * dt, 1.0, rtol=1e-12)
+
+    def test_k_at_lower_bound_is_finite(self):
+        """`base - T = T*K` cannot vanish: K <= 1.0 is rejected at construction."""
+        with self.assertRaises(ValueError):
+            RTKTriangle(R=0.1, T=2.0, K=1.0)
+        ords = triangular_uh(RTKTriangle(R=0.1, T=2.0, K=1.001), dt_hours=0.25)
+        self.assertTrue(np.all(np.isfinite(ords)))
+
+
+# ---------------------------------------------------------------------------
+# TestIANumbaFastPath
+#
+# ``_compute_excess_series_fast`` is a numba transcription of
+# ``IAModel.compute_excess_series``; with fastmath off it must be bit-identical.
+# ---------------------------------------------------------------------------
+
+def _parity_forcing(n: int = 500, seed: int = 0):
+    """Return (rain, dt, temp) arrays with storms and a seasonal temperature."""
+    rng = np.random.default_rng(seed)
+    rain = np.where(rng.random(n) < 0.2, rng.exponential(4.0, n), 0.0)
+    dt = np.full(n, 0.25)
+    temp = 8.0 + 14.0 * np.sin(np.arange(n) * 2.0 * np.pi / n)
+    return rain, dt, temp
+
+
+class TestIANumbaFastPath(unittest.TestCase):
+
+    BASE_KW = dict(
+        ia_max=5.0, k0=0.05, kT=0.02, theta=0.1,
+        T_ref=20.0, k_dep=0.3, T_freeze=0.0,
+    )
+
+    def _cases(self):
+        rain, dt, temp = _parity_forcing()
+        n = len(rain)
+        return {
+            "temperature_on": dict(rainfall_mm=rain, dt_hours=dt, temperature=temp),
+            "temperature_none": dict(rainfall_mm=rain, dt_hours=dt, temperature=None),
+            "snow_on": dict(rainfall_mm=rain, dt_hours=dt, temperature=temp - 10.0,
+                            snow_ddf=3.0, snow_T=1.0),
+            "all_freezing": dict(rainfall_mm=rain, dt_hours=dt,
+                                 temperature=np.full(n, -5.0)),
+            "dry_only": dict(rainfall_mm=np.zeros(n), dt_hours=dt, temperature=temp),
+            "wet_only": dict(rainfall_mm=np.full(n, 2.0), dt_hours=dt, temperature=temp),
+            "ragged_dt": dict(rainfall_mm=rain,
+                              dt_hours=np.tile([0.25, 1.0, 0.5, 2.0], n // 4),
+                              temperature=temp),
+        }
+
+    @unittest.skipUnless(HAS_NUMBA, "numba not installed")
+    def test_fast_path_is_bit_identical(self):
+        for name, forcing in self._cases().items():
+            with self.subTest(case=name):
+                kw = {**self.BASE_KW, **forcing}
+                np.testing.assert_array_equal(
+                    _ia_mod._compute_excess_series_fast(**kw),
+                    IAModel.compute_excess_series(**kw),
+                )
+
+    @unittest.skipUnless(HAS_NUMBA, "numba not installed")
+    def test_fast_path_shape_and_sign(self):
+        rain, dt, temp = _parity_forcing()
+        out = _ia_mod._compute_excess_series_fast(
+            rainfall_mm=rain, dt_hours=dt, temperature=temp, **self.BASE_KW
+        )
+        self.assertEqual(out.shape, rain.shape)
+        self.assertTrue(np.all(out >= 0.0))
+        self.assertTrue(np.all(out <= rain + 1e-12))
+
+    def _prepared_ia(self) -> IAModel:
+        m = IAModel(units="metric")
+        m.initialize()
+        m.prepare(_make_sample_df())
+        return m
+
+    @unittest.skipUnless(HAS_NUMBA, "numba not installed")
+    def test_predict_arrays_dispatches_to_fast_engine(self):
+        """Guards against a silent fall back to pure Python."""
+        m = self._prepared_ia()
+        spy = unittest.mock.Mock(side_effect=_ia_mod._compute_excess_series_fast)
+        with unittest.mock.patch.object(_ia_mod, "_compute_excess_series_fast", spy):
+            m.predict_arrays()
+        self.assertEqual(spy.call_count, 1)
+
+    def test_predict_arrays_falls_back_without_numba(self):
+        m = self._prepared_ia()
+        spy = unittest.mock.Mock(side_effect=IAModel.compute_excess_series)
+        with unittest.mock.patch.object(_ia_mod, "_HAS_NUMBA", False), \
+                unittest.mock.patch.object(IAModel, "compute_excess_series", spy):
+            m.predict_arrays()
+        self.assertEqual(spy.call_count, 1)
+
+    def test_predict_arrays_result_agrees_across_engines(self):
+        m = self._prepared_ia()
+        fast = m.predict_arrays()["p_excess_mm"]
+        with unittest.mock.patch.object(_ia_mod, "_HAS_NUMBA", False):
+            ref = m.predict_arrays()["p_excess_mm"]
+        np.testing.assert_array_equal(fast, ref)
+
+    def test_module_imports_without_numba(self):
+        """Exercise the no-op ``njit`` shim taken when numba is absent.
+
+        Loaded as a *separate* module object (under a throw-away name, but with
+        the real package so the relative imports resolve) rather than reloading
+        the live one — a reload would rebind ``IAModel`` inside the package and
+        leak a stale class into every later test.
+        """
+        spec = importlib.util.spec_from_file_location(
+            "sparsehydro.models.rdii._ia_without_numba", _ia_mod.__file__
+        )
+        mod = importlib.util.module_from_spec(spec)
+        with unittest.mock.patch.dict(sys.modules, {"numba": None, spec.name: mod}):
+            spec.loader.exec_module(mod)
+
+        self.assertFalse(mod._HAS_NUMBA)
+
+        # The shim must accept both decorator spellings used in the module.
+        @mod.njit
+        def bare(x):
+            return x + 1
+
+        @mod.njit(cache=True, fastmath=False)
+        def configured(x):
+            return x + 2
+
+        self.assertEqual(bare(1), 2)
+        self.assertEqual(configured(1), 3)
+
+        # ...and the "fast" wrapper must still produce the right answer when it
+        # is running the undecorated core.
+        rain, dt, temp = _parity_forcing(n=120)
+        kw = {**self.BASE_KW, "rainfall_mm": rain, "dt_hours": dt, "temperature": temp}
+        np.testing.assert_array_equal(
+            mod._compute_excess_series_fast(**kw),
+            IAModel.compute_excess_series(**kw),
+        )
 
 
 # ---------------------------------------------------------------------------

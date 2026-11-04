@@ -60,6 +60,42 @@ if TYPE_CHECKING:
 _ROLE_KEYS = frozenset({"observed", "predicted", "mask"})
 
 
+class _ColumnExtractor:
+    """Picklable ``(data) -> ndarray`` reader for a single column.
+
+    Binding the column name in a closure would be shorter, but a closure
+    defined inside a function pickles by reference to a name that does not
+    exist at module scope, so it cannot cross a process boundary -- which
+    blocks parallel calibration (``PlatypusSolver(..., n_jobs=...)``), where
+    the problem is shipped to each worker once.  A module-level class pickles
+    as ``(class, state)`` and reconstructs fine.
+
+    :param key: Column to read.
+    :type key: str
+    """
+
+    __slots__ = ("key",)
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+
+    def __call__(self, data: Any) -> np.ndarray:
+        return (
+            data[self.key].to_numpy(dtype=float)
+            if isinstance(data, pd.DataFrame)
+            else np.asarray(data[self.key], dtype=float)
+        )
+
+    def __repr__(self) -> str:
+        return f"_ColumnExtractor({self.key!r})"
+
+    def __getstate__(self) -> str:
+        return self.key
+
+    def __setstate__(self, state: str) -> None:
+        self.key = state
+
+
 def _resolve_extractor(
     mapping_value: Union[str, Callable, None],
     role: str,
@@ -83,12 +119,7 @@ def _resolve_extractor(
     if callable(mapping_value):
         return mapping_value
     if isinstance(mapping_value, str):
-        col = mapping_value
-        return lambda data, c=col: (
-            data[c].to_numpy(dtype=float)
-            if isinstance(data, pd.DataFrame)
-            else np.asarray(data[c], dtype=float)
-        )
+        return _ColumnExtractor(mapping_value)
     raise TypeError(
         f"column_map['{role}'] must be a column name (str) or callable; "
         f"got {type(mapping_value).__name__!r}."
@@ -168,6 +199,10 @@ class CalibrationProblem:
         carry their own ``mask`` override this default.  Positions where
         observed or predicted is ``NaN`` are always excluded regardless.
     :type mask: str or Callable or numpy.ndarray or None
+    :param predict_fn: Optional prediction callback receiving the current worker
+        model. Pair array results with an appropriate predicted extractor.
+        When unset, the existing array-prediction fast path is unchanged.
+    :type predict_fn: Callable or None
     :param prepare_kwargs: Extra keyword arguments forwarded to ``prepare_fn``.
     :type prepare_kwargs: Any
 
@@ -189,10 +224,14 @@ class CalibrationProblem:
         column_map: "dict[str, Any] | None" = None,
         prepare_fn: Callable | None = None,
         mask: "str | Callable | np.ndarray | None" = None,
+        *,
+        predict_fn: Callable[[Any], Any] | None = None,
         **prepare_kwargs: Any,
     ) -> None:
         if objectives is None or len(objectives) == 0:
             raise ValueError("At least one objective is required.")
+        if predict_fn is not None and not callable(predict_fn):
+            raise TypeError("predict_fn must be callable or None.")
 
         cmap = column_map or {}
         rename_entries = {k: v for k, v in cmap.items() if k not in _ROLE_KEYS}
@@ -207,6 +246,7 @@ class CalibrationProblem:
         self._objectives = list(objectives)
         self._column_map = cmap
         self._prepare_fn = prepare_fn
+        self._predict_fn = predict_fn
         self._prepare_kwargs = prepare_kwargs
 
         # ------------------------------------------------------------------
@@ -536,7 +576,9 @@ class CalibrationProblem:
         for name, val in zip(self._param_names, x):
             self._model.apply_flat_parameter(name, float(val))
 
-        if self._predicted_key is not None:
+        if self._predict_fn is not None:
+            predicted = np.asarray(self._result_extractor(self._predict_fn(self._model)), dtype=float)
+        elif self._predicted_key is not None:
             arrays = self._model.predict_arrays()
             predicted = np.asarray(arrays[self._predicted_key], dtype=float)
         else:
