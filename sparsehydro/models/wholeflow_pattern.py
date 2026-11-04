@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 from sparsehydro.models.wholeflow import WholeFlowModel
-from sparsehydro.models.wholeflow import J_INIT_RTK, SUPER_SLOW_RTK
+from sparsehydro.models.rdii import default_rtk_params
+from sparsehydro.models.wholeflow import J_INIT_RTK, SUPER_SLOW_RTK, SUPER_SLOW_T_BOUNDS
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig
 from sparsehydro.models.wholeflow_compact import (
     CompactWholeFlowModel, SanitaryTemplate, _TemplateTerm,
@@ -306,8 +307,8 @@ class PatternWholeFlowModel(CompactWholeFlowModel):
         observed_background: ObservedBackground | None = None,
         annual_seasonality: bool = False,
     ):
-        if isinstance(n_triangles, bool) or not isinstance(n_triangles, int) or not 1 <= n_triangles <= 4:
-            raise ValueError("n_triangles must be an integer from 1 to 4")
+        if isinstance(n_triangles, bool) or not isinstance(n_triangles, int) or n_triangles < 1:
+            raise ValueError("n_triangles must be a positive integer")
         if annual_seasonality is not False:
             raise ValueError("Calendar annual_seasonality has been removed; use a training-derived observed_background")
         if observed_background is not None:
@@ -316,6 +317,15 @@ class PatternWholeFlowModel(CompactWholeFlowModel):
             if groundwater_enabled:
                 raise ValueError("Observed background and physical GWI are mutually exclusive")
         init_rtk = tuple((*J_INIT_RTK, SUPER_SLOW_RTK)[:n_triangles])
+        if n_triangles > len(init_rtk):
+            extra_rtk = default_rtk_params(
+                1, n_triangles - len(init_rtk),
+                T_min=SUPER_SLOW_RTK[1], T_max=SUPER_SLOW_T_BOUNDS[1],
+                R_total=SUPER_SLOW_RTK[0], K_min=SUPER_SLOW_RTK[2], K_max=SUPER_SLOW_RTK[2],
+            )[0]
+            # Keep log-spaced endpoints inside their bounds despite floating-point rounding.
+            init_rtk += tuple((R, float(np.clip(T, *SUPER_SLOW_T_BOUNDS)), K)
+                              for R, T, K in extra_rtk)
         super().__init__(SanitaryTemplate((1.0,) * 24, (1.0,) * 7),
                          area_acres, dt_hours, sanitary_mean_cfs, sanitary_upper_cfs,
                          snow_config=snow_config, calibrate_snow=calibrate_snow,

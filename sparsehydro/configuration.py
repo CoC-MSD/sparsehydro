@@ -84,8 +84,6 @@ class ModelSettings:
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be a boolean")
         _positive_integer("n_triangles", self.n_triangles)
-        if self.n_triangles > 4:
-            raise ValueError("n_triangles must be between 1 and 4")
         if self.calibrate_snow and not self.snow_enabled:
             raise ValueError("Snow calibration requires the snow module")
         if self.seasonal_baseline not in ("auto", "off", "observed"):

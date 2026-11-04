@@ -38,7 +38,7 @@ def build(settings=StudySettings(model=ModelSettings(seasonal_baseline="off")), 
 
 
 @pytest.mark.parametrize("groundwater", [False, True])
-@pytest.mark.parametrize("n_triangles", [1, 2, 3, 4])
+@pytest.mark.parametrize("n_triangles", [1, 2, 3, 4, 5, 12])
 @pytest.mark.parametrize("snow", ["off", "fixed", "calibrated"])
 @pytest.mark.parametrize("dt", [1 / 12, .25, 1.0])
 def test_module_combinations_preserve_components_and_rainfall_budget(groundwater, n_triangles, snow, dt):
@@ -89,15 +89,91 @@ def test_current_model_bypasses_retired_sanitary_construction(monkeypatch):
     assert np.isfinite(model.predict_total_cfs()).all()
 
 
-def test_fourth_pathway_participates_in_sum_r_constraint():
-    model = build(StudySettings(model=ModelSettings(n_triangles=4, seasonal_baseline="off")))
-    for i in range(1, 5):
+@pytest.mark.parametrize("n_triangles", [4, 5, 12])
+def test_all_pathways_participate_in_sum_r_constraint(n_triangles):
+    model = build(StudySettings(model=ModelSettings(n_triangles=n_triangles, seasonal_baseline="off")))
+    for i in range(1, n_triangles + 1):
         model.get_scalar_parameter(f"R_{i}").value = .3
-    assert model.inequality_constraints()[0] == pytest.approx(.2)
+    assert model.inequality_constraints()[0] == pytest.approx(.3 * n_triangles - 1)
     assert not model.validate()
     model.prepare(forcing())
     with pytest.raises(ValueError, match="feasible"):
         model.predict()
+
+
+@pytest.mark.parametrize("n_triangles", [1, 2, 3, 4])
+def test_legacy_pathway_starts_and_bounds_are_unchanged(n_triangles):
+    model = build(StudySettings(model=ModelSettings(n_triangles=n_triangles, seasonal_baseline="off")))
+    expected = [
+        (.03, 1., 2., .1, 6.), (.02, 8., 2.5, 2., 48.),
+        (.01, 48., 3., 12., 120.), (.005, 168., 3., 96., 720.),
+    ]
+    for i, (R, T, K, lo, hi) in enumerate(expected[:n_triangles], 1):
+        parameters = [model.get_scalar_parameter(name) for name in (f"R_{i}", f"uh{i}_T", f"uh{i}_K")]
+        assert [p.value for p in parameters] == [R, T, K]
+        assert [(p.lower_bound, p.upper_bound) for p in parameters] == [(0., 1.), (lo, hi), (1.05, 4.)]
+
+
+@pytest.mark.parametrize("n_triangles", [5, 12, 64])
+def test_additional_pathway_defaults_prediction_and_round_trip(n_triangles):
+    settings = StudySettings(model=ModelSettings(n_triangles=n_triangles, seasonal_baseline="off"))
+    model = build(settings)
+    assert model.n_triangles == n_triangles
+    assert model.validate()
+    extra_R = [model.get_scalar_parameter(f"R_{i}").value for i in range(5, n_triangles + 1)]
+    np.testing.assert_allclose(extra_R, .005 / (n_triangles - 4))
+    assert sum(extra_R) == pytest.approx(.005)
+    extra_T = [model.get_scalar_parameter(f"uh{i}_T") for i in range(5, n_triangles + 1)]
+    assert all(96. <= p.value <= 720. for p in extra_T)
+    assert all((p.lower_bound, p.upper_bound) == (96., 720.) for p in extra_T)
+    assert np.all(np.diff([p.value for p in extra_T]) >= 0)
+    model.prepare(forcing())
+    result = model.predict()
+    columns = [f"rtk{i}_cfs" for i in range(1, n_triangles + 1)]
+    assert {c for c in result if c.startswith("rtk")} == set(columns)
+    np.testing.assert_allclose(result[columns].sum(axis=1), result.rdii_cfs, atol=1e-12)
+    np.testing.assert_array_equal(result.total_cfs, model.predict_total_cfs())
+    assert model.budget["max_abs_error_in"] < 1e-8
+    restored = build(StudySettings.from_dict(settings.to_dict()))
+    restored.prepare(forcing())
+    pd.testing.assert_frame_equal(result, restored.predict(), check_exact=True)
+
+
+def test_additional_pathway_overrides_reach_calibration_and_prediction():
+    settings = StudySettings(
+        model=ModelSettings(n_triangles=12, seasonal_baseline="off"),
+        parameters={
+            "R_12": ParameterSettings(value=.02),
+            "uh12_T": ParameterSettings(value=800., upper_bound=1000.),
+            "uh12_K": ParameterSettings(value=3.5, calibrate=False),
+        },
+    )
+    model = build(settings)
+    data = forcing().assign(flow_cfs=1.)
+    problem = FeasibleCalibrationProblem(
+        model, data, [NashSutcliffe()], column_map={"observed": "flow_cfs", "predicted": "total_cfs"})
+    assert {"R_12", "uh12_T"} <= set(problem.param_names)
+    assert "uh12_K" not in problem.param_names
+    assert model.get_scalar_parameter("uh12_T").value == 800.
+    before = model.predict()
+    assert before.rtk12_cfs.max() > 0
+    model.get_scalar_parameter("R_12").value = 0.
+    after = model.predict()
+    np.testing.assert_allclose(before.total_cfs - before.rtk12_cfs, after.total_cfs, atol=1e-12)
+    np.testing.assert_array_equal(after.rtk12_cfs, 0.)
+
+
+@pytest.mark.parametrize("n_triangles", [0, -1, True, 2.5, "5", None])
+def test_direct_pattern_constructor_rejects_invalid_triangle_counts(n_triangles):
+    with pytest.raises(ValueError, match="positive integer"):
+        PatternWholeFlowModel(PATTERN, 20.26, 1., .8, 2., n_triangles=n_triangles)
+
+
+def test_wholeflow_constructor_rejects_empty_triangle_definitions():
+    from sparsehydro.models.wholeflow import WholeFlowModel
+
+    with pytest.raises(ValueError, match="at least one RTK triangle"):
+        WholeFlowModel(np.ones(2), 20.26, 1., [], sanitary_mode="offset")
 
 
 def test_parameter_selection_and_fixed_values_reach_calibration_problem():
@@ -126,7 +202,8 @@ def test_disabled_and_unknown_parameter_overrides_are_rejected(name):
 
 
 @pytest.mark.parametrize("kwargs", [
-    {"n_triangles": 0}, {"n_triangles": 5}, {"n_triangles": True}, {"n_triangles": 2.5},
+    {"n_triangles": 0}, {"n_triangles": -1}, {"n_triangles": True}, {"n_triangles": 2.5},
+    {"n_triangles": "5"}, {"n_triangles": None},
     {"groundwater_enabled": "False"}, {"snow_enabled": 1}, {"calibrate_snow": True},
     {"snow_melt_factor": -1}, {"snow_threshold_c": float("nan")},
 ])
@@ -202,15 +279,16 @@ def test_objective_factory_preserves_masks_order_and_rejects_leakage():
 
 
 @pytest.mark.parametrize("method", ["nsga2", "spea2", "cmaes", "differential_evolution"])
-def test_each_solver_executes_a_configured_core_model(method):
+@pytest.mark.parametrize("n_triangles", [4, 6])
+def test_each_solver_executes_a_configured_core_model(method, n_triangles):
     config = CalibrationSettings(
         solver=method, scoring_mode="multiobjective" if method in ("nsga2", "spea2") else "single",
         objectives=("ccc", "nash_sutcliffe") if method in ("nsga2", "spea2") else ("nash_sutcliffe",),
         population=8, generations=2, workers=2, cma_trials=8, cma_startup_trials=2,
         cma_starts=1, cma_jobs=1, cma_progress_every=0, de_maxiter=1, de_popsize=3)
-    model = build(StudySettings(model=ModelSettings(n_triangles=4, seasonal_baseline="off"), calibration=config))
+    model = build(StudySettings(model=ModelSettings(n_triangles=n_triangles, seasonal_baseline="off"), calibration=config))
     for name in model.scalar_parameter_names:
-        model.get_scalar_parameter(name).calibrate = name in ("sanitary_mean_cfs", "R_4")
+        model.get_scalar_parameter(name).calibrate = name in ("sanitary_mean_cfs", f"R_{n_triangles}")
     model.prepare(forcing())
     data = forcing().assign(flow_cfs=model.predict_total_cfs() * 1.03)
     train = np.ones(len(data), bool)
@@ -246,7 +324,7 @@ def notebook_namespace(notebook):
 
 
 @pytest.mark.parametrize("groundwater", [False, True])
-@pytest.mark.parametrize("n_triangles", [1, 2, 3, 4])
+@pytest.mark.parametrize("n_triangles", [1, 2, 3, 4, 5, 12])
 def test_notebook_pages_wire_modules_bounds_values_and_parameter_switches(notebook, groundwater, n_triangles):
     sources = {c["id"]: "".join(c["source"]) for c in notebook["cells"]}
     ns = notebook_namespace(notebook)
@@ -256,6 +334,12 @@ def test_notebook_pages_wire_modules_bounds_values_and_parameter_switches(notebo
         PARAMETER_OVERRIDES={"ia_T_ref": {"value": 12., "calibrate": True},
                              "ia_kT": {"value": .02, "calibrate": False}},
     )
+    if n_triangles > 4:
+        ns["PARAMETER_OVERRIDES"].update({
+            f"R_{n_triangles}": {"value": .01},
+            f"uh{n_triangles}_T": {"value": 500., "lower_bound": 200., "upper_bound": 900.},
+            f"uh{n_triangles}_K": {"value": 3., "calibrate": False},
+        })
     build_model_state(ns)
     model = ns["joint_model"]
     assert model.n_triangles == n_triangles
@@ -263,8 +347,13 @@ def test_notebook_pages_wire_modules_bounds_values_and_parameter_switches(notebo
     assert model.get_scalar_parameter("ia_T_ref").calibrate
     assert not model.get_scalar_parameter("ia_kT").calibrate
     assert model.get_scalar_parameter("R_1").value == ns["R_1_value"] == .08
-    if n_triangles == 4:
+    if n_triangles >= 4:
         assert model.get_scalar_parameter("uh4_T").value == 168
+    if n_triangles > 4:
+        assert model.get_scalar_parameter(f"R_{n_triangles}").value == .01
+        assert model.get_scalar_parameter(f"uh{n_triangles}_T").value == 500.
+        assert not model.get_scalar_parameter(f"uh{n_triangles}_K").calibrate
+        assert f"rtk{n_triangles}_cfs" in model.predict()
     payload = ns["study_settings"].to_dict()
     assert payload["workflow"]["events"]["EVENT_SOURCE"] == "hybrid"
     assert payload["workflow"]["events"]["EVENT_FILE"] == ns["EVENT_FILE"]

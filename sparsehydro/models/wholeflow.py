@@ -247,7 +247,7 @@ class WholeFlowModel(IModel):
     """Joint GWI-stores + RTK model on the SHARED, live initial-abstraction store.
 
     Reuses :func:`_gwi_B_core` for the S/G stores; convolves the SAME-step excess
-    through 3 RTK triangles. Nothing is frozen: every IA knob change re-derives both
+    through any positive number of RTK triangles. Every IA knob change re-derives both
     the excess (-> RDII) and the GWI, so a single objective can trade the two off.
 
     The sanitary term is never frozen: ``sanitary_mode`` (required) is ``"offset"``
@@ -269,8 +269,8 @@ class WholeFlowModel(IModel):
         self._area_acres = float(area_acres)
         self._dt_hours = float(dt_hours)
         self._init = list(init_rtk)
-        if not 1 <= len(self._init) <= 4:
-            raise ValueError("Whole-flow models require 1 to 4 RTK triangles")
+        if not self._init:
+            raise ValueError("Whole-flow models require at least one RTK triangle")
         if not isinstance(groundwater_enabled, bool):
             raise ValueError("groundwater_enabled must be a boolean")
         self.groundwater_enabled = groundwater_enabled
@@ -328,14 +328,15 @@ class WholeFlowModel(IModel):
                 self.get_scalar_parameter(nm).calibrate = False
         self.sanitary.register(self)          # floor_offset_cfs (calibrated) in offset mode
 
-        # --- RTK triangle parameters (fast / medium / slow) -------------------
+        # --- RTK triangle parameters ----------------------------------------
         for t in self._tri:
             t.initialize()
         for i, (R, T, K) in enumerate(self._init, 1):
             self.register_scalar_parameter(ScalarParameter(
                 f"R_{i}", value=R, lower_bound=0.0, upper_bound=1.0, units="-",
                 description=f"Pathway {i}: fraction of live excess routed through this UH"))
-            lo, hi = (*J_T_BOUNDS, SUPER_SLOW_T_BOUNDS)[i - 1]
+            t_bounds = (*J_T_BOUNDS, SUPER_SLOW_T_BOUNDS)
+            lo, hi = t_bounds[min(i - 1, len(t_bounds) - 1)]
             self.register_scalar_parameter(ScalarParameter(
                 f"uh{i}_T", value=T, lower_bound=lo, upper_bound=hi, units="hr",
                 description=f"Pathway {i}: time to peak"))

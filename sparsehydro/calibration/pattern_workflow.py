@@ -112,7 +112,8 @@ def study_settings_from_controls(controls: Mapping[str, Any]) -> StudySettings:
     names = ["s_max", "ia_k_dep", "ia_k0", "ia_kT", "ia_theta", "ia_T_ref", "ia_T_freeze", "area_acres"]
     if modules.groundwater_enabled:
         names += ["k_div", "k_G", "g_max"]
-    for i in range(1, modules.n_triangles + 1):
+    # The settings page exposes four pathways; later ones use model defaults or explicit overrides.
+    for i in range(1, min(modules.n_triangles, 4) + 1):
         names += [f"R_{i}", f"uh{i}_T", f"uh{i}_K"]
     if snow_active:
         names += ["snow_T", "snow_ddf"]
