@@ -313,15 +313,15 @@ class RDIIModel(IModel):
 
         self._state = ModelState.PREPARED
 
-    def predict(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
+    def predict_arrays(self) -> dict[str, np.ndarray]:
         """Compute RDII by convolving P_excess with each UH component.
 
         Syncs parameter values to sub-models on every call so parameter changes
         made between optimizer iterations are picked up automatically.
 
-        :returns: DataFrame with columns ``datetime``, ``rdii_cfs``,
-            ``rdii_mm`` (or ``rdii_in``), ``p_excess_mm`` (or ``p_excess_in``).
-        :rtype: pandas.DataFrame
+        :returns: Mapping with ``datetime``, ``rdii_cfs``, ``rdii_mm`` (or
+            ``rdii_in``), ``p_excess_mm`` (or ``p_excess_in``).
+        :rtype: dict[str, numpy.ndarray]
         :raises RuntimeError: If ``prepare()`` has not been called.
         """
         if self._prepared_df is None:
@@ -329,13 +329,13 @@ class RDIIModel(IModel):
 
         self._sync_to_submodels()
 
-        ia_result = self._ia_model.predict()
-        if self._excess_col not in ia_result.columns:
+        ia_result = self._ia_model.predict_arrays()
+        if self._excess_col not in ia_result:
             raise RuntimeError(
-                f"ia_model.predict() must return a DataFrame with a "
-                f"'{self._excess_col}' column; got columns: {list(ia_result.columns)}"
+                f"ia_model.predict_arrays() must provide a "
+                f"'{self._excess_col}' entry; got keys: {list(ia_result)}"
             )
-        p_excess = ia_result[self._excess_col].to_numpy(dtype=float)
+        p_excess = np.asarray(ia_result[self._excess_col], dtype=float)
         n = len(p_excess)
         rdii = np.zeros(n, dtype=float)
 
@@ -349,14 +349,23 @@ class RDIIModel(IModel):
         rdii_cfs = rdii * area_acres * self._depth_to_cfs
         rdii_depth = rdii * self._dt_hours
 
-        result = pd.DataFrame({
+        self._state = ModelState.PREDICTED
+        return {
             "datetime": self._prepared_df["datetime"].values,
             "rdii_cfs": rdii_cfs,
             self._depth_col: rdii_depth,
             self._excess_col: p_excess.copy(),
-        })
-        self._state = ModelState.PREDICTED
-        return result
+        }
+
+    def predict(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        """Compute RDII by convolving P_excess with each UH component.
+
+        :returns: DataFrame with columns ``datetime``, ``rdii_cfs``,
+            ``rdii_mm`` (or ``rdii_in``), ``p_excess_mm`` (or ``p_excess_in``).
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If ``prepare()`` has not been called.
+        """
+        return pd.DataFrame(self.predict_arrays())
 
     def predict_components(self) -> pd.DataFrame:
         """Compute the RDII contribution of each UH component separately.

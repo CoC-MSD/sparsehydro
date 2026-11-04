@@ -234,6 +234,10 @@ class RTKTriangle(IUnitHydroComponent):
 def _triangle_value(t: float, T: float, K: float) -> float:
     """Evaluate the triangular UH function at continuous time t.
 
+    Scalar reference for the piecewise-linear ordinate; retained for clarity
+    and testing.  The hot path (:func:`triangular_uh`) uses the vectorized
+    closed-form integral in :func:`_triangle_cumint` instead.
+
     :param t: Continuous time [hr].
     :type t: float
     :param T: Time to peak [hr].
@@ -256,6 +260,10 @@ def _triangle_value(t: float, T: float, K: float) -> float:
 
 def _integrate_triangle(t0: float, t1: float, T: float, K: float) -> float:
     """Integrate the triangular UH exactly over [t0, t1], handling breakpoints.
+
+    Scalar reference (trapezoid split at the ``T`` / ``base`` breakpoints).
+    Equivalent to differencing :func:`_triangle_cumint`; retained for clarity
+    and testing.
 
     :param t0: Interval start time [hr].
     :type t0: float
@@ -284,6 +292,48 @@ def _integrate_triangle(t0: float, t1: float, T: float, K: float) -> float:
     return total
 
 
+def _triangle_cumint(t: np.ndarray, T: float, K: float) -> np.ndarray:
+    """Cumulative integral ``F(t) = ∫₀ᵗ f(s) ds`` of the unit-area triangle.
+
+    ``f`` is the piecewise-linear triangle with peak ``2/base`` at ``t = T`` and
+    zero outside ``[0, base]`` (``base = T·(1+K)``).  Its running integral is a
+    piecewise **quadratic** with the closed form::
+
+        t ≤ 0        : 0
+        0 < t ≤ T    : t² / (base·T)
+        T < t ≤ base : T/base + (2/base)/(base−T) · (base·(t−T) − (t²−T²)/2)
+        t > base     : 1
+
+    Differencing ``F`` at adjacent bin edges gives each bin's exact integral, so
+    this is analytically identical to the trapezoid-with-breakpoints reference
+    (:func:`_integrate_triangle`) to floating-point rounding, but evaluated in a
+    single vectorized pass.  Inputs are assumed pre-clipped to ``[0, base]``.
+
+    ``base - T = T·K`` is never zero: :class:`RTKTriangle` rejects ``K <= 1.0``
+    and ``T <= 0`` at construction.
+
+    :param t: Times [hr], clipped to ``[0, base]``.
+    :type t: numpy.ndarray
+    :param T: Time to peak [hr].
+    :type T: float
+    :param K: Recession-to-peak ratio.
+    :type K: float
+    :returns: ``F(t)`` evaluated elementwise.
+    :rtype: numpy.ndarray
+    """
+    base = T * (1.0 + K)
+    F = np.empty_like(t)
+    rising = t <= T
+    tr = t[rising]
+    F[rising] = tr * tr / (base * T)
+    falling = ~rising
+    tf = t[falling]
+    F[falling] = T / base + (2.0 / base) / (base - T) * (
+        base * (tf - T) - (tf * tf - T * T) / 2.0
+    )
+    return F
+
+
 def triangular_uh(
     triangle: RTKTriangle,
     dt_hours: float,
@@ -292,7 +342,13 @@ def triangular_uh(
     """Compute the unit hydrograph ordinate array for one RTK triangle.
 
     Each element represents the average flow rate [1/hr] over its interval,
-    computed by analytically integrating the piecewise-linear triangle.
+    computed by analytically integrating the piecewise-linear triangle.  The
+    per-bin integrals are obtained by differencing the closed-form cumulative
+    integral (:func:`_triangle_cumint`) at the bin edges — a single vectorized
+    numpy pass rather than a Python loop over every step, which matters because
+    the calibrator rebuilds this kernel on every ``predict()`` and a slow
+    seasonal triangle (large ``T·(1+K)``) can span hundreds of thousands of
+    steps.
 
     The array satisfies::
 
@@ -315,15 +371,12 @@ def triangular_uh(
     if n_steps is None:
         n_steps = math.ceil(base / dt_hours) + 1
 
-    ordinates = np.zeros(n_steps, dtype=float)
-    for j in range(n_steps):
-        t0 = j * dt_hours
-        t1 = t0 + dt_hours
-        if t0 >= base:
-            break
-        ordinates[j] = _integrate_triangle(t0, t1, triangle.T, triangle.K) / dt_hours
-
-    return ordinates
+    # Bin edges 0, dt, 2·dt, …, n_steps·dt, clipped to the triangle's support so
+    # bins beyond `base` contribute exactly zero (F(base) − F(base) = 0), matching
+    # the reference loop's early `break`.
+    edges = np.clip(np.arange(n_steps + 1, dtype=float) * dt_hours, 0.0, base)
+    F = _triangle_cumint(edges, triangle.T, triangle.K)
+    return (F[1:] - F[:-1]) / dt_hours
 
 
 # ---------------------------------------------------------------------------

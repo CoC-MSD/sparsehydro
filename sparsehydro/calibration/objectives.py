@@ -842,3 +842,174 @@ def _index_of_agreement(observed: np.ndarray, predicted: np.ndarray) -> float:
     if ss_pot == 0.0:
         raise ValueError("Potential error (SS_pot) is zero; Index of Agreement is undefined.")
     return float(1.0 - ss_res / ss_pot)
+
+
+class Con15(IObjective):
+    """Absolute error of a zero-intercept event-peak regression slope.
+
+    Rank complete events by observed peak, select
+    ``ceil(top_fraction * event_count)``, and minimize ``abs(slope - 1)``.
+    ``top_fraction=0.15`` reproduces the Con15 selection; ``1.0`` uses all
+    eligible events. The fraction must be finite and in ``(0, 1]``.
+
+    ``event_windows`` is an integer array of inclusive ``[start_idx, end_idx]``
+    pairs on the original time axis, ordered and disjoint by default.
+    ``allow_overlapping_events=True`` preserves approved overlapping windows
+    as independent peak observations. Only events wholly
+    inside the effective mask count. Unlike timestep objectives, this class
+    never compresses arrays or drops missing samples: incomplete observed
+    events and missing selected modeled peaks raise ``ValueError``.
+
+    Peaks are maxima within each fixed event, not necessarily at the same
+    timestamp. This objective measures aggregate peak scaling, not peak timing,
+    crest shape, or individual-event accuracy. Opposing peak errors can cancel.
+    Instances do not cache candidate-dependent state and can be shared by workers.
+
+    :cvar name: ``"con15_error"``
+    :cvar minimize: ``True``
+    """
+
+    name = "con15_error"
+    minimize = True
+
+    def __init__(
+        self,
+        event_windows: np.ndarray,
+        top_fraction: float = 0.15,
+        mask: np.ndarray | None = None,
+        *, allow_overlapping_events: bool = False,
+    ) -> None:
+        super().__init__(mask=mask)
+        _top_peak_indices(np.empty(0), top_fraction)
+        windows = np.asarray(event_windows)
+        if (windows.ndim != 2 or windows.shape[1] != 2 or not len(windows)
+                or windows.dtype.kind not in "iu"):
+            raise ValueError("event_windows must be a nonempty integer array of shape (n, 2)")
+        if (np.any(windows[:, 0] < 0) or np.any(windows[:, 1] < windows[:, 0])
+                or np.any(windows[1:, 0] < windows[:-1, 0])):
+            raise ValueError("Event windows must be nonnegative, ordered by start, and inclusive")
+        if not allow_overlapping_events and np.any(windows[1:, 0] <= windows[:-1, 1]):
+            raise ValueError("Event windows must be nonnegative, ordered, disjoint, and inclusive")
+        self.event_windows = windows.copy()
+        self.event_windows.setflags(write=False)
+        self.top_fraction = float(top_fraction)
+
+    def _event_values(self, values: np.ndarray, indices: np.ndarray) -> np.ndarray:
+        return np.asarray([values[start:end + 1].max()
+                           for start, end in self.event_windows[indices]])
+
+    def selected_event_indices(
+        self,
+        observed: np.ndarray,
+        mask: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Return selected rows of ``event_windows``, ranking within the mask only.
+
+        Filter complete events first, then compute the fraction's event count
+        and observed-peak ranking. Neither the number nor size of events outside
+        the effective mask can affect selection. Returned rows are in peak rank
+        order, with stable ties.
+        """
+        obs = np.asarray(observed, dtype=float)
+        if obs.ndim != 1:
+            raise ValueError("Observed must be a one-dimensional array")
+        if np.any(self.event_windows[:, 1] >= len(obs)):
+            raise ValueError("Event window outside the observation domain")
+        effective = mask if mask is not None else self.mask
+        if isinstance(effective, str) or callable(effective):
+            raise TypeError("Resolve column-name or callable masks through CalibrationProblem")
+        selector = (np.ones(obs.shape, dtype=bool) if effective is None
+                    else np.asarray(effective, dtype=bool))
+        if selector.shape != obs.shape:
+            raise ValueError("mask shape must match observed shape")
+        eligible = np.flatnonzero([
+            selector[start:end + 1].all() for start, end in self.event_windows
+        ])
+        if not len(eligible):
+            raise ValueError("Con15 requires at least one complete event inside the mask")
+        windows = self.event_windows[eligible]
+        obs_events = [obs[start:end + 1] for start, end in windows]
+        if not all(np.isfinite(event).all() for event in obs_events):
+            raise ValueError("Non-finite samples in Con15 observed events; all samples must be finite")
+        obs_peaks = self._event_values(obs, eligible)
+        return eligible[_top_peak_indices(obs_peaks, self.top_fraction)]
+
+    def slope(
+        self,
+        observed: np.ndarray,
+        predicted: np.ndarray,
+        mask: np.ndarray | None = None,
+    ) -> float:
+        """Return the raw peak slope using complete events in the effective mask."""
+        obs = np.asarray(observed, dtype=float)
+        pred = np.asarray(predicted, dtype=float)
+        if obs.ndim != 1 or obs.shape != pred.shape:
+            raise ValueError("Observed and predicted must be aligned one-dimensional arrays")
+        selected = self.selected_event_indices(obs, mask=mask)
+        windows = self.event_windows[selected]
+        obs_peaks = self._event_values(obs, selected)
+        pred_events = [pred[start:end + 1] for start, end in windows]
+        if not all(np.isfinite(event).all() for event in pred_events):
+            raise ValueError("Con15 selected modeled events must contain only finite samples")
+        pred_peaks = self._event_values(pred, selected)
+        value = _peak_regression_slope(obs_peaks, pred_peaks)
+        if not np.isfinite(value):
+            raise ValueError("Con15 requires finite selected peaks and positive observed peak energy")
+        return value
+
+    def compute(
+        self,
+        observed: np.ndarray,
+        predicted: np.ndarray,
+        mask: np.ndarray | None = None,
+    ) -> float:
+        return abs(self.slope(observed, predicted, mask=mask) - 1.0)
+
+    def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
+        """Evaluate on the original time axis, honoring this objective's mask."""
+        return self.compute(observed, predicted)
+
+
+    def prepare_observed(
+        self, observed: np.ndarray, selector: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        # Preserve event indices despite CalibrationProblem compressing timestep arrays.
+        if self.mask is None and not selector.all():
+            raise ValueError("Use original-axis compute for a problem-level partial mask")
+        full = np.full(selector.shape, np.nan)
+        full[selector] = observed
+        self.selected_event_indices(full)
+        full.setflags(write=False)
+        selected = selector.copy()
+        selected.setflags(write=False)
+        return full, selected
+
+
+    def compute_selected(
+        self, observed: np.ndarray, predicted: np.ndarray,
+        context: tuple[np.ndarray, np.ndarray],
+    ) -> float:
+        full_observed, selector = context
+        full_predicted = np.full(selector.shape, np.nan)
+        full_predicted[selector] = predicted
+        return self.compute(full_observed, full_predicted)
+
+
+
+def _top_peak_indices(observed_peaks: np.ndarray, top_fraction: float) -> np.ndarray:
+    """Stable observed-only ranking shared by calibration and acceptance."""
+    if not np.isfinite(top_fraction) or not 0 < top_fraction <= 1:
+        raise ValueError("top_fraction must be finite and in (0, 1]")
+    count = max(1, int(np.ceil(len(observed_peaks) * top_fraction)))
+    return np.argsort(-observed_peaks, kind="stable")[:count]
+
+
+def _peak_regression_slope(observed_peaks: np.ndarray, modeled_peaks: np.ndarray) -> float:
+    """Return a zero-intercept slope, or NaN for an undefined report metric."""
+    x, y = np.asarray(observed_peaks, float), np.asarray(modeled_peaks, float)
+    if x.ndim != 1 or x.shape != y.shape:
+        raise ValueError("Peak arrays must be aligned and one-dimensional")
+    if not len(x) or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+        return float("nan")
+    denominator = float(x @ x)
+    return float(x @ y / denominator) if denominator > 0 else float("nan")

@@ -39,6 +39,7 @@ Optional degree-day snow model (``snow=True``)::
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -46,6 +47,26 @@ import pandas as pd
 from ...enums import ModelState
 from ..base import IModel
 from ...parameters import FieldRecord, ScalarParameter
+
+# Optional numba acceleration for the hot excess loop.  When numba is importable
+# the stateful recurrence in ``compute_excess_series`` is JIT-compiled; otherwise
+# the pure-Python reference below runs unchanged.  ``fastmath`` is kept OFF so the
+# compiled exp/log stay bit-identical to the reference.
+try:
+    from numba import njit  # type: ignore[import]
+
+    _HAS_NUMBA = True
+except Exception:  # pragma: no cover - depends on optional dependency
+    _HAS_NUMBA = False
+
+    def njit(*args, **kwargs):  # no-op fallback: return function undecorated
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]                      # bare @njit
+
+        def _wrap(fn):
+            return fn
+
+        return _wrap                            # @njit(...) with options
 
 
 def _wet_step_excess(ia0: float, k_dep: float, P: float) -> float:
@@ -68,6 +89,102 @@ def _wet_step_excess(ia0: float, k_dep: float, P: float) -> float:
     if p_star >= P:
         return 0.0
     return (P - p_star) - (1.0 / k_dep - ia0 * math.exp(-k_dep * P))
+
+
+@njit(cache=True, fastmath=False)
+def _wet_step_excess_nb(ia0, k_dep, P):
+    """numba twin of :func:`_wet_step_excess` (identical arithmetic)."""
+    if P <= 0.0:
+        return 0.0
+    if k_dep * ia0 <= 1.0:
+        return P - ia0 * (1.0 - math.exp(-k_dep * P))
+    p_star = math.log(k_dep * ia0) / k_dep
+    if p_star >= P:
+        return 0.0
+    return (P - p_star) - (1.0 / k_dep - ia0 * math.exp(-k_dep * P))
+
+
+@njit(cache=True, fastmath=False)
+def _compute_excess_core_nb(rainfall_mm, dt_hours, temperature, use_temp,
+                            ia_max, k0, kT, theta, T_ref, k_dep, T_freeze,
+                            snow_on, snow_ddf, snow_T):
+    """Compiled transcription of the :meth:`IAModel.compute_excess_series` loop.
+
+    ``None`` sentinels (temperature / snow_T) are passed as typed flags
+    (``use_temp`` / ``snow_on``) so numba compiles one concrete signature rather
+    than specializing on optional types.
+
+    The arithmetic is a line-for-line copy of the pure-Python reference and
+    ``fastmath`` is off, so the output is bit-identical to it.
+    """
+    n = rainfall_mm.shape[0]
+    excess = np.zeros(n, dtype=np.float64)
+    ia_avail = ia_max
+    swe = 0.0
+    for i in range(n):
+        P = rainfall_mm[i]
+        dt = dt_hours[i]
+        T = temperature[i] if use_temp else T_ref
+        if snow_on:
+            if T <= snow_T:
+                swe += P
+                P = 0.0
+            elif swe > 0.0:
+                melt = min(swe, snow_ddf * (T - snow_T) * dt / 24.0)
+                swe -= melt
+                P += melt
+        if P <= 0.0:
+            if T >= T_freeze:
+                k_rec = k0 + kT * math.exp(theta * (T - T_ref))
+            else:
+                k_rec = 0.0
+            deficit = ia_max - ia_avail
+            ia_avail = ia_max - deficit * math.exp(-k_rec * dt)
+        else:
+            excess[i] = _wet_step_excess_nb(ia_avail, k_dep, P)
+            ia_avail = ia_avail * math.exp(-k_dep * P)
+        if ia_avail < 0.0:
+            ia_avail = 0.0
+        elif ia_avail > ia_max:
+            ia_avail = ia_max
+    return excess
+
+
+def _compute_excess_series_fast(
+    rainfall_mm,
+    dt_hours,
+    temperature,
+    ia_max,
+    k0,
+    kT,
+    theta,
+    T_ref,
+    k_dep,
+    T_freeze,
+    snow_ddf=0.0,
+    snow_T=None,
+):
+    """numba-backed twin of :meth:`IAModel.compute_excess_series`.
+
+    Same signature and semantics; ``temperature`` / ``snow_T`` may be ``None``.
+    Only the array marshalling lives here — the recurrence itself is
+    :func:`_compute_excess_core_nb`.
+
+    :returns: Rainfall excess depth series, same length as *rainfall_mm*.
+    :rtype: numpy.ndarray
+    """
+    rainfall_mm = np.ascontiguousarray(rainfall_mm, dtype=np.float64)
+    dt_hours = np.ascontiguousarray(dt_hours, dtype=np.float64)
+    use_temp = temperature is not None
+    temp_arr = (np.ascontiguousarray(temperature, dtype=np.float64)
+                if use_temp else np.empty(0, dtype=np.float64))
+    snow_on = snow_T is not None
+    return _compute_excess_core_nb(
+        rainfall_mm, dt_hours, temp_arr, use_temp,
+        float(ia_max), float(k0), float(kT), float(theta), float(T_ref),
+        float(k_dep), float(T_freeze), snow_on, float(snow_ddf),
+        float(snow_T) if snow_on else 0.0,
+    )
 
 
 class IAModel(IModel):
@@ -301,7 +418,11 @@ class IAModel(IModel):
 
         self._sync_from_params()
 
-        excess = IAModel.compute_excess_series(
+        # The compiled core is a bit-identical transcription of the reference
+        # (fastmath off), so this swaps speed in without changing results.
+        _engine = (_compute_excess_series_fast if _HAS_NUMBA
+                   else IAModel.compute_excess_series)
+        excess = _engine(
             rainfall_mm=self._rain_arr,
             dt_hours=self._dt_arr,
             temperature=self._temp_arr,
@@ -435,6 +556,11 @@ class IAModel(IModel):
         Pure function (no instance state) — safe for parallel optimizer use.
         ``ia_avail`` starts at ``ia_max`` (fully saturated capacity).
 
+        This is the readable reference implementation.  When numba is installed,
+        :meth:`predict_arrays` routes through the compiled twin
+        (:func:`_compute_excess_series_fast`) instead, which produces
+        bit-identical output; this method stays the definition of correct.
+
         :param rainfall_mm: Per-step rainfall depth series.
         :type rainfall_mm: numpy.ndarray
         :param dt_hours: Per-step interval length series [hr].
@@ -520,3 +646,81 @@ class IAModel(IModel):
         if self._snow:
             self.snow_T = self.get_scalar_parameter("snow_T").value
             self.snow_ddf = self.get_scalar_parameter("snow_ddf").value
+
+
+def _snow_step(precipitation, temperature, dt_hours, swe, snow_T, snow_ddf):
+    """Partition water once, before either IA implementation receives it."""
+    snowfall = 0.0
+    melt = 0.0
+    if temperature <= snow_T:
+        snowfall = precipitation
+        swe += precipitation
+        liquid = 0.0
+    else:
+        if swe > 0.0:
+            melt = min(swe, snow_ddf * (temperature - snow_T) * dt_hours / 24.0)
+            swe -= melt
+        liquid = precipitation + melt
+    return swe, liquid, snowfall, melt
+
+
+_snow_step_nb = njit(cache=True, fastmath=False)(_snow_step)
+
+
+@dataclass(frozen=True)
+class SnowConfig:
+    """Immutable imperial degree-day settings; SWE is water, not snow depth."""
+
+    threshold_c: float = 1.0
+    melt_factor_in_per_c_day: float = 0.12
+    initial_swe_in: float = 0.0
+
+    def __post_init__(self) -> None:
+        if (not np.isfinite(self.threshold_c)
+                or not np.isfinite(self.melt_factor_in_per_c_day)
+                or self.melt_factor_in_per_c_day < 0
+                or not np.isfinite(self.initial_swe_in) or self.initial_swe_in < 0):
+            raise ValueError("Snow settings must be finite; melt factor and initial SWE nonnegative")
+
+
+@njit(cache=True, fastmath=False, nogil=True)
+def _snow_partition_core(precipitation, temperature, dt_hours, threshold, factor, initial):
+    n = len(precipitation)
+    swe = np.zeros(n)
+    liquid = np.zeros(n)
+    snowfall = np.zeros(n)
+    melt = np.zeros(n)
+    storage = initial
+    for i in range(n):
+        storage, liquid[i], snowfall[i], melt[i] = _snow_step_nb(
+            precipitation[i], temperature[i], dt_hours, storage, threshold, factor)
+        swe[i] = storage
+    return swe, liquid, snowfall, melt
+
+
+def snow_partition(
+    precipitation_in: np.ndarray, temperature_c: np.ndarray, dt_hours: float,
+    config: SnowConfig | None = None,
+) -> pd.DataFrame:
+    """Deterministic forcing-only snow ledger; ``None`` passes precipitation through.
+
+    Run on the full forcing record including warmup, never separately by split.
+    ``rainfall_in`` at the caller remains measured total precipitation; only
+    ``liquid_input_in`` may enter the soil/GWI/RTK physics.
+    """
+    rain = np.ascontiguousarray(precipitation_in, dtype=float)
+    temp = np.ascontiguousarray(temperature_c, dtype=float)
+    if (rain.ndim != 1 or rain.size == 0 or temp.shape != rain.shape
+            or not np.isfinite(rain).all() or (rain < 0).any()
+            or not np.isfinite(temp).all() or not np.isfinite(dt_hours) or dt_hours <= 0):
+        raise ValueError("Snow forcing must be aligned finite vectors, nonnegative rain, positive timestep")
+    if config is None:
+        swe, liquid, snowfall, melt = np.zeros_like(rain), rain.copy(), np.zeros_like(rain), np.zeros_like(rain)
+    else:
+        swe, liquid, snowfall, melt = _snow_partition_core(
+            rain, temp, dt_hours, config.threshold_c,
+            config.melt_factor_in_per_c_day, config.initial_swe_in)
+    return pd.DataFrame({
+        "snowfall_in": snowfall, "rain_liquid_in": rain - snowfall,
+        "melt_in": melt, "liquid_input_in": liquid, "SWE_in": swe,
+    })

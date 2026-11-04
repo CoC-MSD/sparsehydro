@@ -26,6 +26,9 @@ Public API
 +------------------------------------------+------------------------------------------------------+
 | :func:`plot_calibration_dashboard`       | Multi-panel offline HTML dashboard                   |
 +------------------------------------------+------------------------------------------------------+
+| :func:`thin_for_display`                 | Min/max-envelope copy of a figure for inline display |
+| :func:`add_val_vrects`                   | Shade validation runs of a train/val split           |
++------------------------------------------+------------------------------------------------------+
 
 All functions require the optional ``plotly`` dependency::
 
@@ -61,6 +64,8 @@ try:
     from .rdii import plot_rdii_components, plot_rtk_shape
     from .seasonality import plot_seasonality_components
     from .dashboard import plot_calibration_dashboard
+    from .display import add_val_vrects, thin_for_display
+    from .wholeflow_presentation import plot_wholeflow_presentation
     from .unithydrograph import (
         plot_rainfall_flow_with_events,
         plot_filter_signals,
@@ -75,6 +80,9 @@ try:
     )
 
 except ImportError:
+
+    def plot_wholeflow_presentation(*args, **kwargs):
+        raise ImportError("plotly is required for plot_wholeflow_presentation. Install with: pip install plotly")
 
     def plot_timeseries(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_timeseries. Install with: pip install plotly")
@@ -119,6 +127,12 @@ except ImportError:
 
     def plot_calibration_dashboard(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_calibration_dashboard. Install with: pip install plotly")
+
+    def thin_for_display(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for thin_for_display. Install with: pip install plotly")
+
+    def add_val_vrects(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for add_val_vrects. Install with: pip install plotly")
 
     def plot_rainfall_flow_with_events(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_rainfall_flow_with_events. Install with: pip install plotly")
@@ -214,6 +228,10 @@ __all__ = [
     "plot_seasonality_components",
     # Dashboard
     "plot_calibration_dashboard",
+    "plot_wholeflow_presentation",
+    # Display helpers
+    "thin_for_display",
+    "add_val_vrects",
     # Unit hydrograph workflow
     "plot_rainfall_flow_with_events",
     "plot_filter_signals",

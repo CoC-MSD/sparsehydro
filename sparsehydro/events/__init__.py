@@ -68,6 +68,9 @@ class EventRecord:
     peak_flow: float
     b2b_start: bool = False
     b2b_end: bool = False
+    qualifying: bool = True
+    exclusion_reason: str | None = None
+    flow_response: bool = True
 
     def duration_hours(self) -> float:
         """Return event duration in hours.
@@ -94,6 +97,9 @@ class EventRecord:
             "peak_flow": self.peak_flow,
             "b2b_start": self.b2b_start,
             "b2b_end": self.b2b_end,
+            "qualifying": self.qualifying,
+            "exclusion_reason": self.exclusion_reason,
+            "flow_response": self.flow_response,
         }
 
 
@@ -110,10 +116,25 @@ def events_to_dataframe(events: list[EventRecord]) -> pd.DataFrame:
             columns=[
                 "event_id", "start_datetime", "end_datetime", "peak_datetime",
                 "total_rain", "total_flow", "effective_area", "peak_flow",
-                "b2b_start", "b2b_end",
+                "b2b_start", "b2b_end", "qualifying", "exclusion_reason", "flow_response",
             ]
         )
     return pd.DataFrame([e.to_dict() for e in events])
+
+
+def events_to_mask(
+    events: list[EventRecord], datetimes, *, qualifying_only: bool = False,
+) -> np.ndarray:
+    """Mark timestamps inside inclusive event windows, optionally after screening."""
+    dt = pd.to_datetime(pd.Series(datetimes)).to_numpy(dtype="datetime64[ns]")
+    mask = np.zeros(dt.shape[0], dtype=bool)
+    for event in events:
+        if qualifying_only and not event.qualifying:
+            continue
+        start = np.datetime64(pd.Timestamp(event.start_datetime), "ns")
+        end = np.datetime64(pd.Timestamp(event.end_datetime), "ns")
+        mask |= (dt >= start) & (dt <= end)
+    return mask
 
 
 def load_events_from_csv(path: str | os.PathLike) -> list[EventRecord]:
@@ -554,6 +575,11 @@ from .records import (  # noqa: E402
     sub_events_to_dataframe,
     global_events_to_dataframe,
 )
+from .screening import (  # noqa: E402
+    build_global_events, flag_flow_response, merge_by_interevent, refine_event_durations,
+    screen_flow_response, screen_min_duration, screen_small_rainfall, screening_summary,
+    split_by_interevent, split_top_peak_events,
+)
 from .smoothing import (  # noqa: E402
     VariableSavgolResult,
     variable_savgol_smooth,
@@ -575,6 +601,17 @@ __all__ = [
     "EventRecord",
     "detect_events",
     "events_to_dataframe",
+    "events_to_mask",
+    "build_global_events",
+    "flag_flow_response",
+    "merge_by_interevent",
+    "refine_event_durations",
+    "screen_flow_response",
+    "screen_min_duration",
+    "screen_small_rainfall",
+    "screening_summary",
+    "split_by_interevent",
+    "split_top_peak_events",
     "load_events_from_csv",
     # Hierarchical detection
     "SubEventRecord",

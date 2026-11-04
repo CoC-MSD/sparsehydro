@@ -71,6 +71,23 @@ Public API
      - SciPy single-objective (requires scipy)
    * - :class:`OptunaCmaEsSolver`
      - Single-objective CMA-ES, multi-seed / parallel (requires optuna)
+
+**Train / validation splits** (:mod:`~sparsehydro.calibration.splits`)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Name
+     - Description
+   * - :class:`SplitConfig`
+     - Spin-up warmup + continuous / stratified split knobs
+   * - :func:`prepend_spinup`
+     - Synthetic pre-history so no real record is spent on warmup
+   * - :func:`build_masks`
+     - Warmup / train / validation step masks (:class:`SplitMasks`)
+   * - :func:`label_events_by_split`
+     - Assign storms to warmup / train / val; count edge-straddlers
 """
 
 from .callbacks import ProgressCallback
@@ -88,11 +105,21 @@ from .objectives import (
     LogNSE,
     IndexOfAgreement,
     ConcordanceCorrelationCoefficient,
+    Con15,
     DisjointWindowCCC,
 )
 from .problem import CalibrationProblem
 from .result import CalibrationResult, GenerationRecord, _identify_pareto
 from .solvers import ISolver, NSGAIISolver, OptunaCmaEsSolver, ParticleSwarmSolver, PlatypusSolver, ScipySolver
+from .splits import (
+    SplitConfig,
+    SplitMasks,
+    build_masks,
+    dry_edge_flags,
+    label_events_by_split,
+    prepend_spinup,
+    wrap_seasonal_slip_days,
+)
 
 __all__ = [
     # Objectives
@@ -109,6 +136,7 @@ __all__ = [
     "LogNSE",
     "IndexOfAgreement",
     "ConcordanceCorrelationCoefficient",
+    "Con15",
     "DisjointWindowCCC",
     # Problem
     "CalibrationProblem",
@@ -122,6 +150,14 @@ __all__ = [
     "ParticleSwarmSolver",
     "PlatypusSolver",
     "ScipySolver",
+    # Splits
+    "SplitConfig",
+    "SplitMasks",
+    "prepend_spinup",
+    "dry_edge_flags",
+    "build_masks",
+    "label_events_by_split",
+    "wrap_seasonal_slip_days",
     # Callbacks
     "ProgressCallback",
 ]

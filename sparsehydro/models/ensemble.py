@@ -55,6 +55,38 @@ from ..parameters import ConstraintRecord, FieldRecord, ScalarParameter, VectorP
 from ..registry import registry
 
 
+class _ColumnExtractor:
+    """Picklable ``(DataFrame) -> ndarray`` reader for a single column.
+
+    A closure would be the obvious way to bind the column name, but a closure
+    defined inside ``__init__`` pickles by reference to a name that does not
+    exist at module scope, so it cannot cross a process boundary.  That blocks
+    parallel calibration (``PlatypusSolver(..., n_jobs=...)``), which ships the
+    whole problem to each worker once.  A module-level class pickles as
+    ``(class, state)`` and reconstructs fine.
+
+    :param key: Column to read from the child model's ``predict()`` frame.
+    :type key: str
+    """
+
+    __slots__ = ("key",)
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+
+    def __call__(self, df: "pd.DataFrame") -> np.ndarray:
+        return df[self.key].to_numpy()
+
+    def __repr__(self) -> str:
+        return f"_ColumnExtractor({self.key!r})"
+
+    def __getstate__(self) -> str:
+        return self.key
+
+    def __setstate__(self, state: str) -> None:
+        self.key = state
+
+
 @registry.register
 class EnsembleModel(IModel):
     """Combines N :class:`~sparsehydro.models.IModel` instances via weighted sum or product.
@@ -65,10 +97,15 @@ class EnsembleModel(IModel):
     calibration framework.  All child inequality constraints are surfaced and
     concatenated so constraint-aware solvers handle them natively.
 
-    :param components: List of ``(model, extractor)`` pairs.  ``extractor`` is a
-        callable ``(predict_df: pandas.DataFrame) → numpy.ndarray`` that selects
-        the scalar output array from each child's ``predict()`` result.
-    :type components: list[tuple[IModel, Callable]]
+    :param components: List of ``(model, extractor)`` pairs.  ``extractor`` is
+        either the **name of the column** to select from the child's output, or
+        a callable ``(predict_df: pandas.DataFrame) → numpy.ndarray`` that
+        selects the scalar output array from the child's ``predict()`` result.
+        Prefer the column name: it lets :meth:`predict_arrays` read the child
+        through its own ``predict_arrays()`` fast path, so the calibration hot
+        loop never builds a DataFrame it immediately unwraps.  A callable
+        forces the child's ``predict()`` DataFrame to be materialised.
+    :type components: list[tuple[IModel, Callable | str]]
     :param mode: Combination mode.  ``"sum"`` computes ``Σ w_i · y_i``; ``"product"``
         computes ``Π y_i^w_i``.  Defaults to ``"sum"``.
     :type mode: str
@@ -87,7 +124,7 @@ class EnsembleModel(IModel):
 
     def __init__(
         self,
-        components: list[tuple[IModel, Callable]],
+        components: list[tuple[IModel, Callable | str]],
         mode: str = "sum",
         aliases: list[str] | None = None,
         output_name: str = "ensemble_output",
@@ -110,7 +147,23 @@ class EnsembleModel(IModel):
             self._aliases = [f"model_{i + 1}" for i in range(n)]
 
         self._children: list[IModel] = [m for m, _ in components]
-        self._extractors: list[Callable] = [e for _, e in components]
+        # A column name lets predict_arrays() read the child without building a
+        # DataFrame; a callable needs predict().  Keep both forms: the key when
+        # the fast path is available, and a callable for the DataFrame path.
+        self._extractor_keys: list[str | None] = []
+        self._extractors: list[Callable] = []
+        for _, extractor in components:
+            if isinstance(extractor, str):
+                self._extractor_keys.append(extractor)
+                self._extractors.append(_ColumnExtractor(extractor))
+            elif callable(extractor):
+                self._extractor_keys.append(None)
+                self._extractors.append(extractor)
+            else:
+                raise TypeError(
+                    "Each component extractor must be a column name (str) or a "
+                    f"callable; got {type(extractor).__name__}."
+                )
         self._mode: str = mode
         self._output_name: str = output_name
         self._normalize_weights: bool = normalize_weights and (mode == "sum")
@@ -257,25 +310,44 @@ class EnsembleModel(IModel):
             child.prepare(data, **kwargs)
         self._state = ModelState.PREPARED
 
-    def predict(self) -> pd.DataFrame:
-        """Sync parameters, run each child, and return the combined output.
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """Sync parameters, run each child, and combine, returning plain arrays.
 
-        :returns: DataFrame with a ``datetime`` column (when available), one
-            ``{alias}_output`` column per component, and the combined
-            ``{output_name}`` column.
-        :rtype: pandas.DataFrame
+        Children whose extractor is a column name are read through their own
+        ``predict_arrays()``; children with a callable extractor still have
+        their ``predict()`` DataFrame materialised.
+
+        :returns: Mapping with a ``datetime`` entry (when available), one
+            ``{alias}_output`` entry per component, and the combined
+            ``{output_name}`` entry.
+        :rtype: dict[str, numpy.ndarray]
         """
         self._sync_to_children()
 
         n = len(self._children)
         child_outputs: list[np.ndarray] = []
-        first_pred: pd.DataFrame | None = None
+        datetimes: np.ndarray | None = None
 
-        for i, (child, extractor) in enumerate(zip(self._children, self._extractors)):
-            pred_df = child.predict()
-            if i == 0:
-                first_pred = pred_df
-            child_outputs.append(np.asarray(extractor(pred_df), dtype=float))
+        for i, child in enumerate(self._children):
+            key = self._extractor_keys[i]
+            if key is None:
+                pred_df = child.predict()
+                child_outputs.append(
+                    np.asarray(self._extractors[i](pred_df), dtype=float)
+                )
+                if i == 0 and "datetime" in pred_df.columns:
+                    datetimes = pred_df["datetime"].to_numpy()
+            else:
+                arrays = child.predict_arrays()
+                if key not in arrays:
+                    raise RuntimeError(
+                        f"Component {i + 1} ({self._aliases[i]!r}) has extractor "
+                        f"{key!r}, but its predict_arrays() returned keys: "
+                        f"{list(arrays)}"
+                    )
+                child_outputs.append(np.asarray(arrays[key], dtype=float))
+                if i == 0 and "datetime" in arrays:
+                    datetimes = np.asarray(arrays["datetime"])
 
         weights = [self.get_scalar_parameter(f"w_{i}").value for i in range(1, n + 1)]
 
@@ -290,14 +362,24 @@ class EnsembleModel(IModel):
                     combined = combined * np.where(y > 0.0, y ** w, 0.0)
 
         out: dict[str, Any] = {}
-        if first_pred is not None and "datetime" in first_pred.columns:
-            out["datetime"] = first_pred["datetime"].to_numpy()
+        if datetimes is not None:
+            out["datetime"] = datetimes
         for alias, y in zip(self._aliases, child_outputs):
             out[f"{alias}_output"] = y
         out[self._output_name] = combined
 
         self._state = ModelState.PREDICTED
-        return pd.DataFrame(out)
+        return out
+
+    def predict(self) -> pd.DataFrame:
+        """Sync parameters, run each child, and return the combined output.
+
+        :returns: DataFrame with a ``datetime`` column (when available), one
+            ``{alias}_output`` column per component, and the combined
+            ``{output_name}`` column.
+        :rtype: pandas.DataFrame
+        """
+        return pd.DataFrame(self.predict_arrays())
 
     def finalize(self) -> None:
         """Finalize all child models and advance to FINALIZED."""
