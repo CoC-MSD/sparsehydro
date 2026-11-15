@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-import importlib
+import logging
 from pathlib import Path
-import sys
 
 import numpy as np
 import pandas as pd
@@ -15,6 +14,9 @@ from sparsehydro.data.assembly import describe_results
 from sparsehydro.data.services import DownloadResult, FlowFinityClient
 
 
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,38 +43,32 @@ def select_flowfinity_record(
 
 
 def download_flowfinity_inputs(
-    download_root: Path, *, auth_dir: Path, record_title: str | None, record_index: int,
+    download_root: Path, *, record_title: str | None, record_index: int,
     name_filter: str | None, types: Sequence[str], start: str | None = None, end: str | None = None,
+    username: str | None = None, password: str | None = None,
+    client: FlowFinityClient | None = None,
 ) -> FlowFinityInputs:
-    """Reload local credentials, discover records, and download the selected study.
+    """Discover FlowFinity records and download the selected study inputs.
 
-    An absent authentication module explicitly falls back to the client's
-    environment-variable authentication. Missing imports inside that module
-    propagate rather than being misreported as missing credentials.
+    Credentials are passed explicitly or, when omitted, read by
+    :class:`~sparsehydro.data.services.FlowFinityClient` from the
+    ``FLOWFINITY_USERNAME`` / ``FLOWFINITY_PASSWORD`` environment variables.
+    Keep them out of notebooks and source files.
+
+    :param client: An already configured client (credentials are then ignored).
     """
-    if str(auth_dir) not in sys.path:
-        sys.path.insert(0, str(auth_dir))
-    username, password = None, None
-    try:
-        auth = importlib.reload(importlib.import_module("flowfinity_auth"))
-    except ModuleNotFoundError as error:
-        if error.name != "flowfinity_auth":
-            raise
-        print("flowfinity_auth.py not found - falling back to environment variables.")
-    else:
-        username = getattr(auth, "FLOWFINITY_USERNAME", None)
-        password = getattr(auth, "FLOWFINITY_PASSWORD", None)
-        print("Loaded credentials from flowfinity_auth.py")
-    client = FlowFinityClient(username=username, password=password)
-    print("Client ready ->", client.base_url)
+    if client is None:
+        client = FlowFinityClient(username=username, password=password)
+    logger.info("Client ready -> %s", client.base_url)
     resources = client.list_resources(name_filter)
     records = pd.DataFrame(
         [{"DataTitle": record.get("DataTitle")} for record in resources]
     ).sort_values("DataTitle", ignore_index=True)
-    print(f"{len(records)} record(s) found" + (f" matching {name_filter!r}" if name_filter else ""))
+    logger.info("%d record(s) found%s", len(records),
+                f" matching {name_filter!r}" if name_filter else "")
     title = select_flowfinity_record(records, title=record_title, index=record_index)
-    print(f"Selected record: {title!r}")
-    print("Available data types:", client.available_types(title))
+    logger.info("Selected record: %r", title)
+    logger.info("Available data types: %s", client.available_types(title))
     directory = Path(download_root) / title.replace(" ", "_")
     results = client.download(title, types=list(types), output_dir=directory, parse=True, start=start, end=end)
     describe_results(results)

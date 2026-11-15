@@ -92,19 +92,11 @@ def test_flowfinity_record_index_is_validated(index):
         select_flowfinity_record(pd.DataFrame({"DataTitle": ["first", "second"]}), title=None, index=index)
 
 
-@pytest.mark.parametrize("local_auth", [False, True])
-def test_flowfinity_acquisition_selects_sorted_records_without_network(tmp_path, monkeypatch, local_auth):
-    from types import SimpleNamespace
+@pytest.mark.parametrize("explicit", [False, True])
+def test_flowfinity_acquisition_selects_sorted_records_without_network(tmp_path, monkeypatch, explicit):
     import sparsehydro.studies.msdgc.data as inputs
 
     calls = {}
-    auth = SimpleNamespace(FLOWFINITY_USERNAME="test-user", FLOWFINITY_PASSWORD="test-value")
-
-    def import_auth(name):
-        assert name == "flowfinity_auth"
-        if not local_auth:
-            raise ModuleNotFoundError(name=name)
-        return auth
 
     class Client:
         base_url = "test-service"
@@ -124,12 +116,11 @@ def test_flowfinity_acquisition_selects_sorted_records_without_network(tmp_path,
             calls["title"], calls["download"] = title, kwargs
             return input_results()
 
-    monkeypatch.setattr(inputs.importlib, "import_module", import_auth)
-    monkeypatch.setattr(inputs.importlib, "reload", lambda module: module)
     monkeypatch.setattr(inputs, "FlowFinityClient", Client)
+    credentials = dict(username="test-user", password="test-value") if explicit else {}
     downloaded = download_flowfinity_inputs(
-        tmp_path, auth_dir=tmp_path, record_title=None, record_index=1,
-        name_filter="site", types=["Flow", "Rain"], start="2025-01-01", end=None)
+        tmp_path, record_title=None, record_index=1,
+        name_filter="site", types=["Flow", "Rain"], start="2025-01-01", end=None, **credentials)
     assert downloaded.title == calls["title"] == "second site"
     assert downloaded.directory == tmp_path / "second_site"
     assert downloaded.records.DataTitle.tolist() == ["first site", "second site"]
@@ -138,23 +129,31 @@ def test_flowfinity_acquisition_selects_sorted_records_without_network(tmp_path,
         types=["Flow", "Rain"], output_dir=tmp_path / "second_site",
         parse=True, start="2025-01-01", end=None)
     assert calls["credentials"] == (
-        {"username": "test-user", "password": "test-value"} if local_auth else
+        {"username": "test-user", "password": "test-value"} if explicit else
         {"username": None, "password": None})
     assert set(vars(downloaded)) == {"title", "directory", "records", "results"}
 
 
-def test_flowfinity_auth_dependency_errors_do_not_become_environment_fallbacks(tmp_path, monkeypatch):
-    import sparsehydro.studies.msdgc.data as inputs
+def test_flowfinity_download_never_imports_credentials_from_sys_path(tmp_path, monkeypatch):
+    import sys
 
-    def broken_auth(name):
-        raise ModuleNotFoundError(name="missing_auth_dependency")
+    class Client:
+        base_url = "test-service"
 
-    monkeypatch.setattr(inputs.importlib, "import_module", broken_auth)
-    with pytest.raises(ModuleNotFoundError) as error:
-        download_flowfinity_inputs(
-            tmp_path, auth_dir=tmp_path, record_title=None, record_index=0,
-            name_filter=None, types=["Flow", "Rain"])
-    assert error.value.name == "missing_auth_dependency"
+        def list_resources(self, name_filter):
+            return [{"DataTitle": "site"}]
+
+        def available_types(self, title):
+            return ["Flow", "Rain"]
+
+        def download(self, title, **kwargs):
+            return input_results()
+
+    before = list(sys.path)
+    download_flowfinity_inputs(tmp_path, record_title=None, record_index=0, name_filter=None,
+                               types=["Flow", "Rain"], client=Client())
+    assert sys.path == before
+    assert "flowfinity_auth" not in sys.modules
 
 
 def test_temperature_alignment_uses_fixed_est_and_no_endpoint_filling(tmp_path):
