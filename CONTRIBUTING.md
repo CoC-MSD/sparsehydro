@@ -138,7 +138,7 @@ below it. `tests/test_layering.py` fails if a change breaks this.
 | 4 | `calibration` | Problems, results, solvers, splits and scoring masks, Pareto selection, sequential fitting. |
 | 5 | `configuration` | Building models, objectives and solvers from plain data. |
 | 6 | `visualization` | Plotly figures. |
-| 7 | `viewer`, `studies` | Applications and study-specific workflows. |
+| 7 | `studies` | Study-specific workflows. |
 
 Rules of thumb:
 

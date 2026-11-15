@@ -2,7 +2,7 @@
 
 This is the single implementation of every metric in sparsehydro. The
 calibration objectives in :mod:`sparsehydro.metrics.objectives`, the plots,
-the viewer and the reports all call these functions rather than writing the
+and the reports all call these functions rather than writing the
 formulas again.
 
 All functions take ``observed`` first and ``predicted`` second, convert both to

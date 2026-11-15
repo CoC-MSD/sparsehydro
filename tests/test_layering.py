@@ -9,7 +9,7 @@ Layers (a module may import only from its own layer or lower ones):
   4  calibration
   5  configuration
   6  visualization
-  7  apps       viewer, studies
+  7  studies
 
 Imports inside ``if TYPE_CHECKING:`` blocks are ignored (they never run).
 """
@@ -34,7 +34,7 @@ LAYERS = {
     "calibration": 4,
     "configuration": 5,
     "visualization": 6,
-    "viewer": 7, "studies": 7,
+    "studies": 7,
 }
 
 #: Known upward imports, each with the reason it is acceptable.
@@ -135,5 +135,5 @@ def test_importing_the_package_stays_light():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          cwd=PACKAGE.parent, check=True).stdout
     loaded = set(ast.literal_eval(out.strip().splitlines()[-1]))
-    heavy = loaded & {"calibration", "events", "filters", "metrics", "visualization", "viewer", "studies"}
+    heavy = loaded & {"calibration", "events", "filters", "metrics", "visualization", "studies"}
     assert not heavy, f"import sparsehydro loads {sorted(heavy)}"

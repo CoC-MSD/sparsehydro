@@ -75,8 +75,8 @@ by ``tests/test_layering.py``):
      - ``visualization``
      - Plotly figures
    * - 7
-     - ``viewer``, ``studies``
-     - applications and study-specific workflows (nothing imports ``studies``)
+     - ``studies``
+     - study-specific workflows (nothing imports ``studies``)
 
 .. automodule:: sparsehydro
    :members:
@@ -1034,28 +1034,6 @@ Visualization Model
    :members:
    :show-inheritance:
 
-
-----
-
-Viewer
-------
-
-Interactive Streamlit app for stepping through
-:func:`~sparsehydro.events.detect_event_hierarchy` +
-:class:`~sparsehydro.calibration.sequential.GlobalSequentialFitter` results by
-global event (Overview, Smoothing, UH Shape, Convolution).  Install the
-``viewer`` extra and launch it from a shell:
-
-.. code-block:: bash
-
-   pip install "sparsehydro[viewer]"
-   sparsehydro-viewer path/to/rain_stormflow.csv
-
-.. automodule:: sparsehydro.viewer.data
-   :members:
-
-.. automodule:: sparsehydro.viewer.cli
-   :members:
 
 ----
 

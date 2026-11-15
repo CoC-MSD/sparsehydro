@@ -268,7 +268,6 @@ Optional extras:
 | `speed`    | `pip install "sparsehydro[speed]"`    | Numba-compiled store kernels (much faster calibration) |
 | `parallel` | `pip install "sparsehydro[parallel]"` | Parallel CMA-ES seeds via joblib                     |
 | `excel`    | `pip install "sparsehydro[excel]"`    | Reading `.xlsx` event files                          |
-| `viewer`   | `pip install "sparsehydro[viewer]"`   | `sparsehydro-viewer` Streamlit app                   |
 | `notebook` | `pip install "sparsehydro[notebook]"` | Running your own Jupyter notebooks (ipykernel, numba, openpyxl, kaleido) |
 | `docs`     | `pip install "sparsehydro[docs]"`     | Sphinx documentation build                           |
 | `dev`      | `pip install -e ".[dev]"`             | Everything needed to run the tests and build the docs |

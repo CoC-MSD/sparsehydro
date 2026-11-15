@@ -48,8 +48,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   a plain function (`mse`, `rmse`, `mae`, `nash_sutcliffe`, `log_nse`, `kge`,
   `pbias`, `volume_relative_error`, `index_of_agreement`,
   `concordance_correlation`, `peak_weighted_mse`, `top_peak_indices`,
-  `peak_regression_slope`, `fit_summary`). Objectives, plots, the viewer and
-  the study code all call these instead of their own copies.
+  `peak_regression_slope`, `fit_summary`). Objectives, plots and the study
+  code all call these instead of their own copies.
 - `sparsehydro.calibration.selection` (`feasible_history`,
   `select_peak_filtered_pareto`), `calibration.splits.masks`
   (`dry_weather_mask`, `storm_scoring_mask`, `melt_scoring_mask`),
@@ -135,6 +135,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ### Removed
 
+- **BREAKING:** `sparsehydro.viewer`, the `viewer` extra and the
+  `sparsehydro-viewer` command. The viewer is now a separate application
+  (`sparsehydro.viewer` repository, package `sparsehydro_viewer`).
 - **BREAKING:** `lin_ccc`; use `sparsehydro.metrics.concordance_correlation`
   (`undefined="nan"` reproduces its NaN behaviour).
 - Notebooks, Git LFS, generated plot artifacts and most bundled monitoring
