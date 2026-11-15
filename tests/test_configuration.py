@@ -13,7 +13,8 @@ import pytest
 from sparsehydro.metrics.objectives import NashSutcliffe
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.configuration import CalibrationSettings, GROUNDWATER_PARAMETERS, ModelSettings, ParameterSettings, StudySettings
-from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
+from sparsehydro.models.baseflow import CenteredWeeklyPattern
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
 
 PATTERN = CenteredWeeklyPattern((0.0,) * 24, (0.0,) * 7)
@@ -156,7 +157,8 @@ def test_direct_pattern_constructor_rejects_invalid_triangle_counts(n_triangles)
 
 
 def test_wholeflow_constructor_rejects_empty_triangle_definitions():
-    from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel, SanitaryTemplate
+    from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
+    from sparsehydro.models.baseflow import SanitaryTemplate
 
     with pytest.raises(ValueError, match="at least one RTK triangle"):
         CompactWholeFlowModel(SanitaryTemplate((1.0,) * 24, (1.0,) * 7), 20.26, 1., .5, 2., init_rtk=())
@@ -353,7 +355,7 @@ def test_notebook_snow_bound_overrides_are_applied_before_frozen_masks():
 def test_notebook_alternative_solver_runs_four_pathway_core(tmp_path, method):
     from sparsehydro.calibration.msdgc_assessment import MSDGCSettings
     from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, PBIAS
-    from sparsehydro.models.rdii.initial_abstraction import snow_partition
+    from sparsehydro.models.forcing import snow_partition
 
     ns = notebook_namespace()
     template = build(StudySettings(model=ModelSettings(n_triangles=4, seasonal_baseline="off")))

@@ -7,6 +7,7 @@ Sub-packages
 - :mod:`sparsehydro.models.abstraction` — abstraction stores (tanks, soil/groundwater, external excess)
 - :mod:`sparsehydro.models.forcing` — forcing pre-processing (degree-day snow)
 - :mod:`sparsehydro.models.baseflow` — sanitary/dry-weather baselines and their pre-fit estimators
+- :mod:`sparsehydro.models.presets` — ready-made compositions (whole-flow models)
 
 Interfaces
 ----------
@@ -46,8 +47,7 @@ from .baseflow import (
     SanitaryTemplate,
     SanitaryTemplateModel,
 )
-from .wholeflow_compact import CompactWholeFlowModel
-from .wholeflow_pattern import PatternWholeFlowModel
+from .presets import CompactWholeFlowModel, PatternWholeFlowModel
 
 __all__ = [
     "IModel",

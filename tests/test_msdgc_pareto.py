@@ -8,7 +8,8 @@ from sparsehydro.calibration.msdgc_assessment import MSDGCAssessment
 from sparsehydro.calibration.msdgc_pareto import MSDGC_METRIC_ORDER, evaluate_msdgc_pareto, rank_msdgc_pareto
 from sparsehydro.calibration.result import CalibrationResult
 from sparsehydro.calibration.wholeflow_acceptance import AcceptanceContract
-from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
+from sparsehydro.models.baseflow import CenteredWeeklyPattern
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
 
 def metric_report(count=2):

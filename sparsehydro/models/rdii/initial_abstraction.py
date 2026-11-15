@@ -53,9 +53,7 @@ from ...registry import registry
 # the pure-Python reference below runs unchanged.  ``fastmath`` is kept OFF so the
 # compiled exp/log stay bit-identical to the reference.
 from ..._numba import HAS_NUMBA as _HAS_NUMBA, njit
-from ..forcing.snow import (  # noqa: F401 - re-exported
-    SnowConfig, _snow_partition_core, snow_partition, snow_step, snow_step_nb,
-)
+from ..forcing.snow import snow_step, snow_step_nb
 
 
 
@@ -627,7 +625,3 @@ class IAModel(IModel):
             self.snow_ddf = self.get_scalar_parameter("snow_ddf").value
 
 
-# Snow lives in sparsehydro.models.forcing.snow; these names are kept for
-# existing imports.
-_snow_step = snow_step
-_snow_step_nb = snow_step_nb

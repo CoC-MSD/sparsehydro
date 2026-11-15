@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from sparsehydro.models.rdii.initial_abstraction import SnowConfig
+from sparsehydro.models.forcing import SnowConfig
 
 DT = 1.0
 DAYS = 14
@@ -43,7 +43,7 @@ def forcing() -> pd.DataFrame:
 
 
 def _pattern():
-    from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern
+    from sparsehydro.models.baseflow import CenteredWeeklyPattern
 
     h = 0.1 * np.sin(np.arange(24) * np.pi / 12)
     d = np.array([0.02, 0.02, 0.02, 0.02, 0.02, -0.05, -0.05])
@@ -51,7 +51,7 @@ def _pattern():
 
 
 def _background(data):
-    from sparsehydro.models.wholeflow_pattern import estimate_observed_background
+    from sparsehydro.models.baseflow import estimate_observed_background
 
     return estimate_observed_background(data, np.ones(len(data), bool), _pattern(),
                                         window_days=3, minimum_days=1, max_gap_days=10)
@@ -62,8 +62,9 @@ SNOW = SnowConfig(threshold_c=0.5, melt_factor_in_per_c_day=0.05, initial_swe_in
 
 def build(case: str, data: pd.DataFrame):
     """Return an initialized model for *case*."""
-    from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel, SanitaryTemplate
-    from sparsehydro.models.wholeflow_pattern import PatternWholeFlowModel
+    from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
+    from sparsehydro.models.baseflow import SanitaryTemplate
+    from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
     hourly = 1.0 + 0.2 * np.sin(np.arange(24) * np.pi / 12)
     template = SanitaryTemplate(tuple(hourly / hourly.mean()), (1.0,) * 7)

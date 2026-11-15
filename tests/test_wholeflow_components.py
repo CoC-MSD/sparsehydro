@@ -68,7 +68,7 @@ from sparsehydro.models.baseflow import (  # noqa: E402
     CenteredWeeklyPattern, CenteredWeeklyPatternModel, ObservedBackgroundModel,
     SanitaryTemplate, SanitaryTemplateModel, estimate_observed_background,
 )
-from sparsehydro.models.wholeflow_pattern import PatternWholeFlowModel  # noqa: E402
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel  # noqa: E402
 
 PATTERN = CenteredWeeklyPattern(tuple(0.05 * np.sin(np.arange(24) * np.pi / 12)), (0.0,) * 7)
 

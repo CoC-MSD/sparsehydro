@@ -15,7 +15,7 @@ import pytest
 
 from sparsehydro.models.abstraction import SoilGroundwaterStore
 from sparsehydro.models.baseflow import CenteredWeeklyPattern, profile_slot_levels, slot_of_week
-from sparsehydro.models.wholeflow_pattern import PatternWholeFlowModel
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
 
 def synthetic(n_days: int = 42, seed: int = 3):

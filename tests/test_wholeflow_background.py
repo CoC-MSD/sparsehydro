@@ -9,7 +9,8 @@ from sparsehydro.metrics.objectives import NashSutcliffe
 from sparsehydro.calibration.solvers.scipy_solver import ScipySolver
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.configuration import ModelSettings, ParameterSettings, StudySettings
-from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, ObservedBackground, PatternWholeFlowModel, estimate_observed_background, estimate_sanitary_shapes
+from sparsehydro.models.baseflow import CenteredWeeklyPattern, ObservedBackground, estimate_observed_background, estimate_sanitary_shapes
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
 
 PATTERN = CenteredWeeklyPattern(

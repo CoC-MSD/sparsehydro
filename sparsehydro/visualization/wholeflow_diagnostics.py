@@ -17,7 +17,8 @@ from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, Na
 from sparsehydro.calibration.msdgc_pareto import MSDGC_METRIC_ORDER
 from sparsehydro.calibration.result import CalibrationResult
 from sparsehydro.data.services import DownloadResult
-from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
+from sparsehydro.models.baseflow import CenteredWeeklyPattern
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 from .calibration import plot_pareto_scatter_matrix
 from .display import add_val_vrects
 from ..units import ACRE_INCH_TO_FT3

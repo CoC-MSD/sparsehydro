@@ -9,7 +9,7 @@ import pandas as pd
 
 from .msdgc_assessment import MSDGCAssessment
 from .result import CalibrationResult
-from ..models.wholeflow_compact import CompactWholeFlowModel
+from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
 
 
 MSDGC_METRIC_ORDER = (

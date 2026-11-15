@@ -9,10 +9,11 @@ from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, Na
 from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.enums import ModelState
-from sparsehydro.models import wholeflow_compact
-from sparsehydro.models.rdii.initial_abstraction import SnowConfig
-from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel, SanitaryTemplate
-from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
+from sparsehydro.models.forcing import SnowConfig
+from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
+from sparsehydro.models.baseflow import SanitaryTemplate
+from sparsehydro.models.baseflow import CenteredWeeklyPattern
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
 
 @pytest.fixture(params=["compact", "pattern"])
@@ -92,9 +93,10 @@ def test_lean_does_not_construct_full_output(make_model, monkeypatch):
     def diagnostic_not_allowed(*args, **kwargs):
         raise AssertionError("Lean prediction must not construct diagnostic output")
 
-    monkeypatch.setattr(wholeflow_compact, "pd", SimpleNamespace(DataFrame=diagnostic_not_allowed))
-    monkeypatch.setattr(wholeflow_compact, "_g_at_cap", diagnostic_not_allowed)
-    monkeypatch.setattr(CompactWholeFlowModel, "predict", diagnostic_not_allowed)
+    from sparsehydro.models.presets import wholeflow as presets
+
+    monkeypatch.setattr(presets, "pd", SimpleNamespace(DataFrame=diagnostic_not_allowed))
+    monkeypatch.setattr(type(model), "predict", diagnostic_not_allowed)
     np.testing.assert_array_equal(model.predict_total_cfs(), expected)
 
 

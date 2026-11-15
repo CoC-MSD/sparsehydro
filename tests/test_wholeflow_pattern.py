@@ -14,8 +14,9 @@ from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.calibration.splits.masks import dry_weather_mask
 from sparsehydro.calibration.selection import select_peak_filtered_pareto
-from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
-from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel, estimate_sanitary_shapes
+from sparsehydro.models.forcing import SnowConfig, snow_partition
+from sparsehydro.models.baseflow import CenteredWeeklyPattern, estimate_sanitary_shapes
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
 
 def study_data(dt=1.0, days=100):

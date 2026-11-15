@@ -12,9 +12,10 @@ import pytest
 
 from sparsehydro.calibration.wholeflow_workflow import snow_melt_envelope
 from sparsehydro.calibration.splits.masks import dry_weather_mask, melt_scoring_mask
-from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
+from sparsehydro.models.forcing import SnowConfig, snow_partition
 from sparsehydro.models.abstraction.soil_groundwater import soil_groundwater_core as _gwi_B_core
-from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
+from sparsehydro.models.baseflow import CenteredWeeklyPattern
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
 
 def make_model(dt=1.0, config=None):
@@ -200,7 +201,8 @@ def test_notebook_spinup_snow_is_continuous_and_masks_are_melt_aware(calibrate_s
 @pytest.mark.parametrize("kind", ["compact", "pattern"])
 @pytest.mark.parametrize("dt", [1 / 12, .25, 1.0])
 def test_bounded_snow_candidates_refresh_without_reprepare(kind, dt, monkeypatch):
-    from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel, SanitaryTemplate
+    from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
+    from sparsehydro.models.baseflow import SanitaryTemplate
 
     def build(config, calibrate):
         if kind == "compact":

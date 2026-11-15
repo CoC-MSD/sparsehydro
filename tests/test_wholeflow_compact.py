@@ -3,7 +3,8 @@ import pandas as pd
 import pytest
 
 from sparsehydro.calibration.wholeflow_workflow import frozen_events
-from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel, SanitaryTemplate
+from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
+from sparsehydro.models.baseflow import SanitaryTemplate
 
 
 def synthetic(days=120, start="2024-01-01"):

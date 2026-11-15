@@ -198,8 +198,9 @@ def test_preparation_is_independent_of_datetime_storage_unit(unit, dt, tmp_path)
 
 
 def test_optional_diagnostics_are_self_contained_and_preserve_budget():
-    from sparsehydro.models.rdii.initial_abstraction import SnowConfig
-    from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
+    from sparsehydro.models.forcing import SnowConfig
+    from sparsehydro.models.baseflow import CenteredWeeklyPattern
+    from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
     from sparsehydro.visualization.wholeflow_diagnostics import (
         plot_baseflow_components, plot_snow_diagnostics, plot_water_balance,
     )

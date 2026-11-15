@@ -11,8 +11,8 @@ from sparsehydro.calibration.result import CalibrationResult
 from sparsehydro.calibration.wholeflow_acceptance import AcceptanceEvaluator
 from sparsehydro.metrics.functions import concordance_correlation, nash_sutcliffe, pbias
 from sparsehydro.events.msdgc import find_events
-from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
-from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel
+from sparsehydro.models.forcing import SnowConfig, snow_partition
+from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
 from sparsehydro.calibration.splits.masks import (  # noqa: F401 - used by study code
     dry_weather_mask, melt_scoring_mask, storm_scoring_mask,
 )

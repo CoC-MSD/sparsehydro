@@ -17,11 +17,10 @@ import pandas as pd
 
 from sparsehydro.configuration import CalibrationSettings, ModelSettings, ParameterSettings, StudySettings
 from sparsehydro.events.io import imported_event_inventory, prepare_hybrid_events
-from sparsehydro.models.rdii.initial_abstraction import snow_partition
+from sparsehydro.models.forcing import snow_partition
 from sparsehydro.models.abstraction.soil_groundwater import HAS_NUMBA as _HAS_NUMBA, soil_groundwater_core as _gwi_B_core
-from sparsehydro.models.wholeflow_pattern import (
-    PatternEstimate, PatternWholeFlowModel, estimate_observed_background,
-)
+from sparsehydro.models.baseflow import PatternEstimate, estimate_observed_background
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
 from .msdgc_assessment import MSDGCAssessment, MSDGCCon15, MSDGCSettings, assessment_event_inventory
 from ..metrics.objectives import ConcordanceCorrelationCoefficient, IObjective, NashSutcliffe

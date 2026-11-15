@@ -42,10 +42,9 @@ from sparsehydro.metrics.objectives import (
     ConcordanceCorrelationCoefficient, IObjective, NashSutcliffe, PBIAS, PeakWeightedMSE,
 )
 from sparsehydro.calibration.solvers.base import ISolver
-from sparsehydro.models.rdii.initial_abstraction import SnowConfig
-from sparsehydro.models.wholeflow_pattern import (
-    CenteredWeeklyPattern, ObservedBackground, PatternWholeFlowModel, validate_background_options,
-)
+from sparsehydro.models.forcing import SnowConfig
+from sparsehydro.models.baseflow import CenteredWeeklyPattern, ObservedBackground, validate_background_options
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 from sparsehydro._validation import positive_integer as _positive_integer
 from sparsehydro.parameters import ScalarParameter
 
