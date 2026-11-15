@@ -4,7 +4,7 @@ Covers:
   - IObjective subclasses (MSE, RMSE, MAE, PeakWeightedMSE, NashSutcliffe, KGE)
   - CalibrationProblem (construction, evaluate, make_copy)
   - CalibrationResult (best_by, objective_display_values, to_pareto_dataframe)
-  - _identify_pareto helper
+  - identify_pareto helper
   - NSGAIISolver (conditional on pymoo)
   - ScipySolver (conditional on scipy)
 """
@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from sparsehydro.calibration import IObjective, KGE, LogNSE, MAE, MSE, RMSE, CalibrationProblem, CalibrationResult, GenerationRecord, NashSutcliffe, PeakWeightedMSE
-from sparsehydro.calibration.result import _identify_pareto
+from sparsehydro.calibration.result import identify_pareto
 from sparsehydro.enums import ModelState
 from sparsehydro.models import IModel
 from sparsehydro.parameters import ScalarParameter
@@ -347,19 +347,19 @@ class TestObjectives(unittest.TestCase):
 
 
 # ===========================================================================
-# Test _identify_pareto
+# Test identify_pareto
 # ===========================================================================
 
 class TestIdentifyPareto(unittest.TestCase):
 
     def test_single_solution_is_pareto(self):
         F = np.array([[1.0, 2.0]])
-        mask = _identify_pareto(F)
+        mask = identify_pareto(F)
         self.assertEqual(mask.tolist(), [True])
 
     def test_all_pareto_when_tradeoff(self):
         F = np.array([[0.0, 1.0], [1.0, 0.0]])
-        mask = _identify_pareto(F)
+        mask = identify_pareto(F)
         self.assertTrue(all(mask))
 
     def test_dominated_solution_excluded(self):
@@ -368,14 +368,14 @@ class TestIdentifyPareto(unittest.TestCase):
             [2.0, 2.0],  # dominated by first
             [0.5, 1.5],
         ])
-        mask = _identify_pareto(F)
+        mask = identify_pareto(F)
         self.assertFalse(mask[1])
         self.assertTrue(mask[0])
         self.assertTrue(mask[2])
 
     def test_all_identical_all_pareto(self):
         F = np.array([[1.0, 1.0], [1.0, 1.0]])
-        mask = _identify_pareto(F)
+        mask = identify_pareto(F)
         self.assertTrue(all(mask))
 
 

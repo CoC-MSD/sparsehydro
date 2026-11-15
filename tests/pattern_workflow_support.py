@@ -13,7 +13,7 @@ from sparsehydro.calibration.pattern_workflow import (
 from sparsehydro.calibration.pattern_reporting import assess_pattern_prediction, export_pattern_report
 from sparsehydro.calibration.msdgc_assessment import MSDGCSettings
 from sparsehydro.calibration.splits import SplitConfig
-from sparsehydro.calibration.wholeflow_workflow import parameter_table
+from sparsehydro.calibration.diagnostics import parameter_table
 from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternEstimate
 from sparsehydro.studies.msdgc import default_controls
 

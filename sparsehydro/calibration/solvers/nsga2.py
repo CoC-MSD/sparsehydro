@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .base import ISolver
-from ..result import CalibrationResult, GenerationRecord, _identify_pareto
+from ..result import CalibrationResult, GenerationRecord, identify_pareto
 
 if TYPE_CHECKING:
     from ..problem import CalibrationProblem
@@ -74,7 +74,7 @@ try:
                 pareto_mask = ranks == 0
                 n_pareto = int(np.sum(pareto_mask))
             except Exception:
-                pareto_mask = _identify_pareto(F)
+                pareto_mask = identify_pareto(F)
                 n_pareto = int(np.sum(pareto_mask))
 
             gen = int(algorithm.n_gen)

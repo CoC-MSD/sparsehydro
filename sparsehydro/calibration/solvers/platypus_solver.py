@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Type
 import numpy as np
 
 from .base import ISolver
-from ..result import CalibrationResult, GenerationRecord, _identify_pareto
+from ..result import CalibrationResult, GenerationRecord, identify_pareto
 
 if TYPE_CHECKING:
     from ..problem import CalibrationProblem
@@ -415,7 +415,7 @@ try:
                         F = np.array(
                             [list(sol.objectives) for sol in current], dtype=float
                         )
-                        pareto_mask = _identify_pareto(F)
+                        pareto_mask = identify_pareto(F)
                         n_pareto = int(np.sum(pareto_mask))
                         history.append(
                             GenerationRecord(
@@ -440,7 +440,7 @@ try:
             if final:
                 all_X = np.array([list(sol.variables) for sol in final], dtype=float)
                 all_F = np.array([list(sol.objectives) for sol in final], dtype=float)
-                pareto_mask = _identify_pareto(all_F)
+                pareto_mask = identify_pareto(all_F)
                 pareto_X = all_X[pareto_mask]
                 pareto_F = all_F[pareto_mask]
             else:

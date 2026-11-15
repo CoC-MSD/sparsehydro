@@ -274,3 +274,22 @@ def warn_if_near_bounds(
     else:
         print(message)
     return len(names)
+
+
+def parameter_table(model, tolerance: float = 0.01) -> pd.DataFrame:
+    """One row per scalar parameter with value, bounds, units and a near-bound flag.
+
+    ``near_bound`` is set for calibrated parameters within ``tolerance`` (as a
+    fraction of the bound span) of either bound.
+    """
+    rows = []
+    for name in model.scalar_parameter_names:
+        p = model.get_scalar_parameter(name)
+        span = p.upper_bound - p.lower_bound
+        rows.append({
+            "name": name, "value": p.value, "lower": p.lower_bound, "upper": p.upper_bound,
+            "units": p.units, "calibrated": p.calibrate, "description": p.description,
+            "near_bound": bool(p.calibrate and span > 0 and
+                               min(p.value - p.lower_bound, p.upper_bound - p.value) / span < tolerance),
+        })
+    return pd.DataFrame(rows)

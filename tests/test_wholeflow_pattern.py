@@ -12,7 +12,8 @@ from sparsehydro.calibration.msdgc_assessment import CFS_H_TO_MG, MSDGCAssessmen
 from sparsehydro.calibration.result import CalibrationResult
 from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
 from sparsehydro.calibration.problem import CalibrationProblem
-from sparsehydro.calibration.wholeflow_workflow import dry_weather_mask, select_peak_filtered_pareto
+from sparsehydro.calibration.splits.masks import dry_weather_mask
+from sparsehydro.calibration.selection import select_peak_filtered_pareto
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
 from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel, estimate_sanitary_shapes
 
@@ -571,7 +572,7 @@ def test_disabled_peak_filter_keeps_original_knee_without_predictions(monkeypatc
     def no_prediction(*args, **kwargs):
         raise AssertionError("A disabled filter must not rerun candidate simulations")
 
-    monkeypatch.setattr(PatternWholeFlowModel, "predict_total_cfs", no_prediction)
+    monkeypatch.setattr(PatternWholeFlowModel, "predict_arrays", no_prediction)
     index, table = select_peak_filtered_pareto(result, model, observed, near_tie_allowance=allowance)
     assert index == result.knee_index()
     assert table.filter_pass.isna().all() and table.filter_peak_slope.isna().all()
@@ -755,7 +756,7 @@ def test_near_tie_propagates_simulation_errors(monkeypatch):
     def broken_prediction(*args, **kwargs):
         raise RuntimeError("Explicit simulation failure")
 
-    monkeypatch.setattr(PatternWholeFlowModel, "predict_total_cfs", broken_prediction)
+    monkeypatch.setattr(PatternWholeFlowModel, "predict_arrays", broken_prediction)
     with pytest.raises(RuntimeError, match="Explicit simulation failure"):
         select_peak_filtered_pareto(
             result, model, observed, peak_filter=peak_filter, near_tie_allowance=.02,
@@ -822,7 +823,7 @@ def test_filter_validates_tolerance_and_propagates_simulation_errors(tolerance, 
     def broken_prediction(*args, **kwargs):
         raise RuntimeError("Explicit simulation failure")
 
-    monkeypatch.setattr(PatternWholeFlowModel, "predict_total_cfs", broken_prediction)
+    monkeypatch.setattr(PatternWholeFlowModel, "predict_arrays", broken_prediction)
     with pytest.raises(RuntimeError, match="Explicit simulation failure"):
         select_peak_filtered_pareto(result, model, observed, peak_filter=peak_filter)
 

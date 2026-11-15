@@ -26,6 +26,7 @@ from .blocks import (
     prepend_spinup,
     wrap_seasonal_slip_days,
 )
+from .masks import dry_weather_mask, melt_scoring_mask, storm_scoring_mask
 from .events import EventSplit, estimate_recession_hours, stratified_event_split
 from ...metrics.events import per_event_scores, summarize_event_scores
 
@@ -40,6 +41,9 @@ __all__ = [
     "dry_edge_flags",
     "build_masks",
     "label_events_by_split",
+    "dry_weather_mask",
+    "storm_scoring_mask",
+    "melt_scoring_mask",
     "EventSplit",
     "stratified_event_split",
     "estimate_recession_hours",

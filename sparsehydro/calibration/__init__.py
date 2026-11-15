@@ -110,7 +110,9 @@ from ..metrics.objectives import (
 )
 from .problem import CalibrationProblem
 from .sequential import GlobalSequentialFitter, SequentialFitSummary, SequentialFitter
-from .result import CalibrationResult, GenerationRecord, _identify_pareto
+from .result import CalibrationResult, GenerationRecord, identify_pareto
+from .diagnostics import parameter_table, parameters_near_bounds, pareto_parameters_near_bounds, warn_if_near_bounds
+from .selection import feasible_history, select_peak_filtered_pareto
 from .solvers import ISolver, NSGAIISolver, PlatypusCmaEsSolver, ParticleSwarmSolver, PlatypusSolver, ScipySolver
 from .splits import (
     SplitConfig,
@@ -161,6 +163,13 @@ __all__ = [
     "wrap_seasonal_slip_days",
     # Callbacks
     "ProgressCallback",
+    "identify_pareto",
+    "parameter_table",
+    "parameters_near_bounds",
+    "pareto_parameters_near_bounds",
+    "warn_if_near_bounds",
+    "feasible_history",
+    "select_peak_filtered_pareto",
     "SequentialFitter",
     "SequentialFitSummary",
     "GlobalSequentialFitter",

@@ -13,7 +13,7 @@ import pytest
 
 from sparsehydro.metrics.objectives import Con15, ConcordanceCorrelationCoefficient, NashSutcliffe
 from sparsehydro.calibration.splits import SplitConfig, build_masks, prepend_spinup
-from sparsehydro.calibration.wholeflow_workflow import dry_weather_mask
+from sparsehydro.calibration.splits.masks import dry_weather_mask
 from sparsehydro.events.io import load_pcswmm_events, prepare_hybrid_events
 from sparsehydro.models.rdii.initial_abstraction import snow_partition
 

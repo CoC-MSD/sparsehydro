@@ -28,7 +28,8 @@ from .msdgc_assessment import MSDGCAssessment
 from .msdgc_pareto import MSDGC_METRIC_ORDER, rank_msdgc_pareto
 from .pattern_workflow import PreparedPatternData, PatternCalibration, PatternEventCoverage
 from .wholeflow_acceptance import AcceptanceContract
-from .wholeflow_workflow import parameter_table, passing_pareto_metrics, hydrograph_diagnostics
+from .wholeflow_workflow import passing_pareto_metrics, hydrograph_diagnostics
+from sparsehydro.calibration.diagnostics import parameter_table
 
 
 @dataclass

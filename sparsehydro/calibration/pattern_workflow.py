@@ -30,10 +30,9 @@ from .result import CalibrationResult
 from .solvers.base import ISolver
 from .splits import SplitConfig, build_masks, prepend_spinup
 from .wholeflow_acceptance import AcceptanceContract
-from .wholeflow_workflow import (
-    dry_weather_mask, frozen_events, melt_scoring_mask,
-    select_peak_filtered_pareto, snow_melt_envelope, storm_scoring_mask,
-)
+from .wholeflow_workflow import frozen_events, snow_melt_envelope
+from sparsehydro.calibration.splits.masks import dry_weather_mask, melt_scoring_mask, storm_scoring_mask
+from sparsehydro.calibration.selection import select_peak_filtered_pareto
 
 
 WORKFLOW_FIELDS = {
