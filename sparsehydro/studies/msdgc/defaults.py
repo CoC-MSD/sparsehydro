@@ -3,7 +3,7 @@
 These are the values from the settings pages of the study notebook
 (``flowfinity_gwi_wholeflow_pattern_joint.ipynb``), held in the package so that
 tests and scripts do not need the notebook. Pass the result, with any edits, to
-:func:`sparsehydro.calibration.pattern_workflow.study_settings_from_controls`.
+:func:`sparsehydro.studies.msdgc.settings.study_settings_from_controls`.
 
 Keys keep the notebook's upper-case names because the workflow functions read
 them by those names.

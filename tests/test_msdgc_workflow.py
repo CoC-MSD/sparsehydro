@@ -4,9 +4,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.msdgc_assessment import CFS_H_TO_MG, MSDGCAssessment, MSDGCCon15, MSDGCSettings, _zone_window, assessment_event_inventory
+from sparsehydro.units import CFS_H_TO_MG
+from sparsehydro.studies.msdgc.assessment import MSDGCAssessment, MSDGCCon15, MSDGCSettings, _zone_window
+from sparsehydro.studies.msdgc.events import assessment_event_inventory
 from sparsehydro.metrics.objectives import Con15
-from sparsehydro.calibration.wholeflow_acceptance import AcceptanceContract
+from sparsehydro.studies.msdgc.assessment import AcceptanceContract
 from sparsehydro.metrics.functions import concordance_correlation
 
 

@@ -4,13 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.pattern_workflow import prepare_pattern_data, study_settings_from_controls
+from sparsehydro.studies.msdgc.workflow import prepare_pattern_data
+from sparsehydro.studies.msdgc.settings import study_settings_from_controls
 from sparsehydro.calibration.splits import SplitConfig, build_masks
 from sparsehydro.data.services import DownloadResult
 from sparsehydro.data.assembly import assemble_modeling_data, modeling_timestep, read_local_results
-from sparsehydro.data.wholeflow import (
-    align_air_temperature, download_flowfinity_inputs, select_flowfinity_record,
-)
+from sparsehydro.studies.msdgc.data import align_air_temperature, download_flowfinity_inputs, select_flowfinity_record
 from sparsehydro.units import MGD_TO_CFS
 from tests.pattern_workflow_support import controls
 
@@ -96,7 +95,7 @@ def test_flowfinity_record_index_is_validated(index):
 @pytest.mark.parametrize("local_auth", [False, True])
 def test_flowfinity_acquisition_selects_sorted_records_without_network(tmp_path, monkeypatch, local_auth):
     from types import SimpleNamespace
-    import sparsehydro.data.wholeflow as inputs
+    import sparsehydro.studies.msdgc.data as inputs
 
     calls = {}
     auth = SimpleNamespace(FLOWFINITY_USERNAME="test-user", FLOWFINITY_PASSWORD="test-value")
@@ -145,7 +144,7 @@ def test_flowfinity_acquisition_selects_sorted_records_without_network(tmp_path,
 
 
 def test_flowfinity_auth_dependency_errors_do_not_become_environment_fallbacks(tmp_path, monkeypatch):
-    import sparsehydro.data.wholeflow as inputs
+    import sparsehydro.studies.msdgc.data as inputs
 
     def broken_auth(name):
         raise ModuleNotFoundError(name="missing_auth_dependency")

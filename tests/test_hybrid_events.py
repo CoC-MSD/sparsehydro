@@ -14,7 +14,8 @@ import pytest
 from sparsehydro.metrics.objectives import Con15, ConcordanceCorrelationCoefficient, NashSutcliffe
 from sparsehydro.calibration.splits import SplitConfig, build_masks, prepend_spinup
 from sparsehydro.calibration.splits.masks import dry_weather_mask
-from sparsehydro.events.io import load_pcswmm_events, prepare_hybrid_events
+from sparsehydro.events.io import load_pcswmm_events
+from sparsehydro.studies.msdgc.events import prepare_hybrid_events
 from sparsehydro.models.forcing import snow_partition
 
 
@@ -180,7 +181,7 @@ def test_notebook_hybrid_restores_broad_windows_but_not_bad_observations(tmp_pat
 
 
 def test_notebook_hybrid_peak_setup_uses_only_approved_training_events(tmp_path):
-    from sparsehydro.calibration.msdgc_assessment import MSDGCCon15, MSDGCSettings
+    from sparsehydro.studies.msdgc.assessment import MSDGCCon15, MSDGCSettings
 
     ns, _ = notebook_case(tmp_path)
     ns.update(USE_TRAINING_PEAK_FILTER=True,
@@ -206,8 +207,8 @@ def test_notebook_hybrid_peak_setup_uses_only_approved_training_events(tmp_path)
 
 
 def test_notebook_87_excluded_from_all_assessment_controls_not_broad_fit(tmp_path):
-    from sparsehydro.calibration.msdgc_assessment import MSDGCAssessment, MSDGCSettings
-    from sparsehydro.calibration.wholeflow_acceptance import AcceptanceContract
+    from sparsehydro.studies.msdgc.assessment import MSDGCAssessment, MSDGCSettings
+    from sparsehydro.studies.msdgc.assessment import AcceptanceContract
 
     ns, original = notebook_case(tmp_path)
     full = load_pcswmm_events(ns["_all_event_file"])

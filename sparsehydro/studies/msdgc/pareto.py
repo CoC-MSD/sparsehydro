@@ -7,8 +7,8 @@ import copy
 import numpy as np
 import pandas as pd
 
-from .msdgc_assessment import MSDGCAssessment
-from .result import CalibrationResult
+from sparsehydro.studies.msdgc.assessment import MSDGCAssessment
+from sparsehydro.calibration.result import CalibrationResult
 from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
 
 

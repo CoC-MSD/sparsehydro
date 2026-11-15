@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.wholeflow_workflow import frozen_events
+from sparsehydro.studies.msdgc.events import frozen_events
 from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
 from sparsehydro.models.baseflow import SanitaryTemplate
 

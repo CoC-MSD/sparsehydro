@@ -1,24 +1,15 @@
-"""Reproducible local-data workflow for the compact joint-calibration notebook."""
+"""MSDGC study events: frozen detection per split, hybrid EVT inventories, melt windows."""
 
 from __future__ import annotations
 
-import copy
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from sparsehydro.calibration.result import CalibrationResult
-from sparsehydro.calibration.wholeflow_acceptance import AcceptanceEvaluator
-from sparsehydro.metrics.functions import concordance_correlation, nash_sutcliffe, pbias
-from sparsehydro.events.msdgc import find_events
+from sparsehydro.events.io import load_event_windows, load_pcswmm_events, map_event_windows
+from sparsehydro.studies.msdgc.detector import find_events
 from sparsehydro.models.forcing import SnowConfig, snow_partition
-from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
-from sparsehydro.calibration.splits.masks import (  # noqa: F401 - used by study code
-    dry_weather_mask, melt_scoring_mask, storm_scoring_mask,
-)
-from sparsehydro.calibration.selection import feasible_history, select_peak_filtered_pareto  # noqa: F401
-from sparsehydro.calibration.diagnostics import parameter_table  # noqa: F401
-
 
 
 def frozen_events(
@@ -126,68 +117,107 @@ def snow_melt_envelope(
             & (bounds[1, 1] > 0))
 
 
-def passing_pareto_metrics(
-    result: CalibrationResult,
-    model: CompactWholeFlowModel,
-    pareto_solutions: pd.DataFrame,
-    evaluators: dict[str, AcceptanceEvaluator],
+def assessment_event_inventory(
+    times: pd.DatetimeIndex, approved: pd.DataFrame,
+    train: np.ndarray, validation: np.ndarray, *,
+    excluded_event_ids: tuple[str, ...] = ("87",),
+    full_inventory: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Report all filter-passing final candidates without selecting or refitting.
+    """Preserve source approval and audit exclusions without changing fitting masks.
 
-    Call only after selection when the training filter is enabled. Re-simulate
-    each passing vector on a private model, then report each evaluator's declared
-    metric set for each split, including all three zones for MSDGCAssessment.
-    Validation/whole scores are diagnostic only. The filter's independently
-    configured slope/error is included, not substituted for standard Con15.
-    Zero passes returns a typed-column empty table without any simulations.
+    Hybrid assessment uses full EVT timestamps for approved IDs. Like MSDGC's
+    lookup, the scan includes the first native sample on or after the end.
+    Whole-event split/quality checks include that sample; no clipping or leakage.
     """
-    if (len(pareto_solutions) != len(result.pareto_X)
-            or not np.array_equal(pareto_solutions["pareto_index"].to_numpy(),
-                                  np.arange(len(result.pareto_X)))):
-        raise ValueError("Pareto report rows must align with the complete final front")
-    if not pareto_solutions["filter_enabled"].all():
-        raise ValueError("Passing Pareto metrics require the training peak filter")
-    metrics = next(iter(evaluators.values())).report_metric_names if evaluators else ()
-    if any(evaluator.report_metric_names != metrics for evaluator in evaluators.values()):
-        raise ValueError("Pareto report evaluators must use the same metric definitions")
-    columns = ["pareto_index", "selected", "filter_peak_slope", "filter_peak_error"]
-    for split in evaluators:
-        for metric in metrics:
-            columns.extend([f"{split}_{metric}", f"{split}_{metric}_status",
-                            f"{split}_{metric}_n", f"{split}_{metric}_reason"])
-    passing = pareto_solutions.loc[pareto_solutions["filter_pass"].fillna(False)]
-    if passing.empty:
-        return pd.DataFrame(columns=columns)
-    worker = copy.deepcopy(model)
-    rows = []
-    for candidate in passing.itertuples():
-        index = int(candidate.pareto_index)
-        for name, value in zip(result.param_names, result.pareto_X[index]):
-            worker.apply_flat_parameter(name, float(value))
-        prediction = worker.predict_total_cfs()
-        row = dict(pareto_index=index, selected=bool(candidate.selected),
-                   filter_peak_slope=float(candidate.filter_peak_slope),
-                   filter_peak_error=float(candidate.filter_peak_error))
-        for split, evaluator in evaluators.items():
-            scores = evaluator.metrics(prediction).set_index("metric")
-            for metric in metrics:
-                score = scores.loc[metric]
-                row.update({
-                    f"{split}_{metric}": score["value"],
-                    f"{split}_{metric}_status": score["status"],
-                    f"{split}_{metric}_n": score["n"],
-                    f"{split}_{metric}_reason": score["reason"],
-                })
-        rows.append(row)
-    return pd.DataFrame(rows, columns=columns)
+    times = pd.DatetimeIndex(times)
+    train, validation = np.asarray(train, bool), np.asarray(validation, bool)
+    if (len(times) < 2 or times.hasnans or times.has_duplicates
+            or not times.is_monotonic_increasing or times.tz is not None
+            or train.shape != (len(times),) or validation.shape != train.shape
+            or (train & validation).any()):
+        raise ValueError("Assessment requires ordered native timestamps and aligned disjoint split masks")
+    source = approved.copy()
+    if source.event_id.astype(str).duplicated().any():
+        raise ValueError("Assessment event IDs must be unique")
+    source["source_start"], source["source_end"] = source["start"], source["end"]
+    source["assessment_window_source"] = "approved"
+    if full_inventory is not None:
+        full = full_inventory.copy()
+        full.index = full.event_id.astype(str)
+        if full.index.has_duplicates or not source.event_id.astype(str).isin(full.index).all():
+            raise ValueError("Full EVT inventory must contain each approved event ID exactly once")
+        for column in ("start", "end"):
+            source[column] = source.event_id.astype(str).map(full[column])
+        source["assessment_window_source"] = "full_evt"
+    excluded = set(map(str, excluded_event_ids))
+    for index, event in source.iterrows():
+        start = int(times.searchsorted(event["start"], side="left"))
+        end = int(times.searchsorted(event["end"], side="left"))
+        reason = str(event["exclusion"]) if not event["eligible"] else ""
+        if str(event["event_id"]) in excluded:
+            reason = ";".join(filter(None, [reason, "assessment_criteria_exclusion"]))
+        split = "excluded"
+        if event["start"] < times[0] or event["end"] > times[-1]:
+            reason = reason or "outside_model_record"
+        elif end - start + 1 < 2:
+            reason = reason or "insufficient_model_samples"
+        elif train[start:end + 1].all():
+            split = "train"
+        elif validation[start:end + 1].all():
+            split = "validation"
+        else:
+            reason = reason or "assessment_endpoint_crosses_split_or_unscored"
+        source.loc[index, ["start_idx", "end_idx", "split", "eligible", "exclusion"]] = [
+            start, end, split, not reason, reason,
+        ]
+    source["duration_hours"] = (
+        (pd.to_datetime(source["end"]) - pd.to_datetime(source["start"])).dt.total_seconds() / 3600
+    ).round(2)
+    return source
 
 
-def hydrograph_diagnostics(observed: np.ndarray, modeled: np.ndarray) -> dict:
-    x, y = np.asarray(observed), np.asarray(modeled)
-    if not len(x) or not np.isfinite(x).all() or not np.isfinite(y).all():
-        return {"ccc": np.nan, "nse": np.nan, "bias_pct": np.nan, "n": len(x)}
-    return dict(ccc=concordance_correlation(x, y, undefined="nan"),
-                nse=nash_sutcliffe(x, y, undefined="nan"),
-                bias_pct=pbias(x, y, undefined="nan"), n=len(x))
+def prepare_hybrid_events(
+    data: pd.DataFrame, train: np.ndarray, validation: np.ndarray,
+    all_event_file: str | Path, approved_event_file: str | Path,
+) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
+    """Separate reliable calibration coverage from approved reporting windows.
 
-
+    Exact Data Issues intervals are excluded from every observation-based fit,
+    including padding/melt/NSE and dry-weather fitting. Forcing is untouched.
+    Return full/approved inventories and a fixed observation-quality mask.
+    """
+    full = load_pcswmm_events(all_event_file)
+    approved = load_event_windows(approved_event_file)
+    groups = full["group"].str.casefold()
+    known = {
+        "qualifying event", "excluded;data issues", "excluded;small rainfall",
+        "excluded;winter conditions", "excluded;little or no wwf reaction",
+    }
+    unknown = set(groups) - known
+    if unknown:
+        raise ValueError(f"Unrecognized EVT groups; review calibration eligibility: {sorted(unknown)}")
+    qualifying = full.loc[groups.eq("qualifying event")]
+    if set(approved["event_id"]) != set(qualifying["event_id"]):
+        raise ValueError(
+            "Approved IDs must match EVT Qualifying Event IDs; "
+            f"missing from approved={sorted(set(qualifying.event_id) - set(approved.event_id))}, "
+            f"not qualifying in EVT={sorted(set(approved.event_id) - set(qualifying.event_id))}"
+        )
+    times = pd.DatetimeIndex(data["datetime"])
+    quality = np.ones(len(data), bool)
+    issues = full.loc[groups.eq("excluded;data issues")]
+    for event in issues.itertuples():
+        a = int(times.searchsorted(event.start, side="left"))
+        b = int(times.searchsorted(event.end, side="right"))
+        quality[a:b] = False
+    train, validation = np.asarray(train, bool), np.asarray(validation, bool)
+    calibration = map_event_windows(data, train & quality, validation & quality, full)
+    reports = map_event_windows(data, train & quality, validation & quality, approved)
+    for inventory in (calibration, reports):
+        for i, event in inventory.iterrows():
+            a, b = max(0, int(event["start_idx"])), min(len(data), int(event["end_idx"]) + 1)
+            if not quality[a:b].all():
+                inventory.loc[i, ["eligible", "exclusion"]] = [False, "overlaps_data_issues"]
+    flagged = calibration["group"].str.casefold().eq("excluded;data issues")
+    calibration.loc[flagged, ["eligible", "exclusion"]] = [False, "data_issues"]
+    return calibration, reports, quality

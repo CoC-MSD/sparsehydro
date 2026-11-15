@@ -8,7 +8,8 @@ import pytest
 from sparsehydro.metrics.objectives import NashSutcliffe
 from sparsehydro.calibration.solvers.scipy_solver import ScipySolver
 from sparsehydro.calibration.problem import CalibrationProblem
-from sparsehydro.configuration import ModelSettings, ParameterSettings, StudySettings
+from sparsehydro.studies.msdgc.settings import ModelSettings, StudySettings
+from sparsehydro.configuration import ParameterSettings
 from sparsehydro.models.baseflow import CenteredWeeklyPattern, ObservedBackground, estimate_observed_background, estimate_sanitary_shapes
 from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 

@@ -1,4 +1,4 @@
-"""sparsehydro.events.msdgc — Faithful port of the MSDGC storm-event detector.
+"""sparsehydro.studies.msdgc.detector — Faithful port of the MSDGC storm-event detector.
 
 This module reproduces the "Generate Storm Events" algorithm from the
 *Observed vs. Model Flow* tool of the MSDGC *Model Application Tools* software
@@ -34,7 +34,7 @@ Shipped configuration defaults (``MSDGC Model Application Tools.exe.config``)::
 
 Quick start::
 
-    from sparsehydro.events.msdgc import find_events, compare_observed_vs_model
+    from sparsehydro.studies.msdgc.detector import find_events, compare_observed_vs_model
 
     events = find_events(win)                    # win: datetime / rain / stormflow
     report = compare_observed_vs_model(events, win)
@@ -47,7 +47,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from ..units import GALLONS_PER_FT3
+from sparsehydro.units import GALLONS_PER_FT3
 
 # Conversion for reporting cfs·hr accumulations as million gallons (MG).
 _CF_PER_GALLON = GALLONS_PER_FT3
@@ -121,7 +121,7 @@ class _WorkEvent:
     valid: bool = True
 
 
-def events_to_dataframe(events: list[MsdgcEvent]) -> pd.DataFrame:
+def msdgc_events_to_dataframe(events: list[MsdgcEvent]) -> pd.DataFrame:
     """Convert a list of :class:`MsdgcEvent` objects to a DataFrame.
 
     :param events: Events to convert (may be empty).
@@ -437,6 +437,6 @@ def compare_observed_vs_model(
 __all__ = [
     "MsdgcEvent",
     "find_events",
-    "events_to_dataframe",
+    "msdgc_events_to_dataframe",
     "compare_observed_vs_model",
 ]

@@ -12,7 +12,8 @@ import pytest
 
 from sparsehydro.metrics.objectives import NashSutcliffe
 from sparsehydro.calibration.problem import CalibrationProblem
-from sparsehydro.configuration import CalibrationSettings, GROUNDWATER_PARAMETERS, ModelSettings, ParameterSettings, StudySettings
+from sparsehydro.studies.msdgc.settings import CalibrationSettings, GROUNDWATER_PARAMETERS, ModelSettings, StudySettings
+from sparsehydro.configuration import ParameterSettings
 from sparsehydro.models.baseflow import CenteredWeeklyPattern
 from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
@@ -353,7 +354,7 @@ def test_notebook_snow_bound_overrides_are_applied_before_frozen_masks():
 
 @pytest.mark.parametrize("method", ["spea2", "differential_evolution"])
 def test_notebook_alternative_solver_runs_four_pathway_core(tmp_path, method):
-    from sparsehydro.calibration.msdgc_assessment import MSDGCSettings
+    from sparsehydro.studies.msdgc.assessment import MSDGCSettings
     from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, PBIAS
     from sparsehydro.models.forcing import snow_partition
 
@@ -405,7 +406,7 @@ def test_notebook_alternative_solver_runs_four_pathway_core(tmp_path, method):
 
 
 def test_flowfinity_record_selection_uses_settings_page():
-    from sparsehydro.data.wholeflow import select_flowfinity_record
+    from sparsehydro.studies.msdgc.data import select_flowfinity_record
 
     ns = notebook_namespace()
     ns.update(DATA_SOURCE="flowfinity", FLOWFINITY_RECORD_INDEX=1,

@@ -8,7 +8,8 @@ import pandas as pd
 import pytest
 
 from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe, Con15
-from sparsehydro.calibration.msdgc_assessment import CFS_H_TO_MG, MSDGCAssessment, MSDGCSettings
+from sparsehydro.units import CFS_H_TO_MG
+from sparsehydro.studies.msdgc.assessment import MSDGCAssessment, MSDGCSettings
 from sparsehydro.calibration.result import CalibrationResult
 from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
 from sparsehydro.calibration.problem import CalibrationProblem
@@ -394,7 +395,7 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
         )
         report_state(ns)
         metadata = json.loads((tmp_path / "run_metadata.json").read_text())
-        from sparsehydro.configuration import StudySettings
+        from sparsehydro.studies.msdgc.settings import StudySettings
         saved_settings = json.loads((tmp_path / "study_settings.json").read_text())
         assert StudySettings.from_dict(saved_settings) == ns["study_settings"]
         assert metadata["groundwater_enabled"] is True
@@ -962,7 +963,7 @@ def test_notebook_requires_actual_compiled_numba_signature(monkeypatch):
     ns.update(odwf_cfs=.8, _dt_hours=1.0, SEASONAL_BASELINE="off", sanitary_pattern=make_model().pattern,
               model_df=study_data(days=10))
     configure_state(ns)
-    monkeypatch.setattr("sparsehydro.calibration.pattern_workflow._gwi_B_core",
+    monkeypatch.setattr("sparsehydro.studies.msdgc.workflow._gwi_B_core",
                         SimpleNamespace(nopython_signatures=(), targetoptions={}))
     with pytest.raises(RuntimeError, match="did not compile"):
         build_model_state(ns)

@@ -6,7 +6,6 @@ calculations; all observation-derived fits use the quality-eligible training mas
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
@@ -15,134 +14,27 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from sparsehydro.configuration import CalibrationSettings, ModelSettings, ParameterSettings, StudySettings
-from sparsehydro.events.io import imported_event_inventory, prepare_hybrid_events
+from sparsehydro.studies.msdgc.settings import (
+    StudySettings, _validate_peak_preference,
+)
+from sparsehydro.events.io import imported_event_inventory
+from sparsehydro.studies.msdgc.events import prepare_hybrid_events
 from sparsehydro.models.forcing import snow_partition
 from sparsehydro.models.abstraction.soil_groundwater import HAS_NUMBA as _HAS_NUMBA, soil_groundwater_core as _gwi_B_core
 from sparsehydro.models.baseflow import PatternEstimate, estimate_observed_background
 from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 
-from .msdgc_assessment import MSDGCAssessment, MSDGCCon15, MSDGCSettings, assessment_event_inventory
-from ..metrics.objectives import ConcordanceCorrelationCoefficient, IObjective, NashSutcliffe
-from .problem import CalibrationProblem
-from .result import CalibrationResult
-from .solvers.base import ISolver
-from .splits import SplitConfig, build_masks, prepend_spinup
-from .wholeflow_acceptance import AcceptanceContract
-from .wholeflow_workflow import frozen_events, snow_melt_envelope
+from sparsehydro.studies.msdgc.assessment import MSDGCAssessment, MSDGCCon15, MSDGCSettings
+from sparsehydro.studies.msdgc.events import assessment_event_inventory
+from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, IObjective, NashSutcliffe
+from sparsehydro.calibration.problem import CalibrationProblem
+from sparsehydro.calibration.result import CalibrationResult
+from sparsehydro.calibration.solvers.base import ISolver
+from sparsehydro.calibration.splits import SplitConfig, build_masks, prepend_spinup
+from sparsehydro.studies.msdgc.assessment import AcceptanceContract
+from sparsehydro.studies.msdgc.events import frozen_events, snow_melt_envelope
 from sparsehydro.calibration.splits.masks import dry_weather_mask, melt_scoring_mask, storm_scoring_mask
 from sparsehydro.calibration.selection import select_peak_filtered_pareto
-
-
-WORKFLOW_FIELDS = {
-    "events": ("EVENT_SOURCE", "EVENT_FILE", "APPROVED_EVENTS_FILE", "CALIBRATION_PRE_HOURS",
-               "CALIBRATION_TAIL_HOURS", "ASSESSMENT_EXCLUDED_EVENT_IDS",
-               "STORM_DETECTION_SETTINGS"),
-    "data": ("DATA_SOURCE", "DATA_TITLE", "SOURCE_DIR", "RAIN_FILE", "FLOW_FILE",
-             "BASEFLOW_FILE", "STORMFLOW_FILE", "RAIN_COLUMN", "FLOW_COLUMN",
-             "BASEFLOW_COLUMN", "STORMFLOW_COLUMN", "FILE_START", "FILE_END", "TIMESTEP",
-             "TEMPERATURE_MAX_GAP_HOURS", "NAME_FILTER", "FLOWFINITY_RECORD_TITLE",
-             "FLOWFINITY_RECORD_INDEX", "TYPES", "START", "END"),
-    "simulation": ("WARMUP_DAYS", "SPINUP_MODE", "AREA_ACRES", "DRY_EXCLUSION_HOURS",
-                   "SANITARY_UPPER_MULTIPLIER", "REQUIRE_NUMBA"),
-    "holdout": ("SPLIT_MODE", "TRAIN_FRAC", "STRAT_BLOCK_DAYS", "VAL_EVERY", "SNAP_EDGES_TO_DRY",
-                "EDGE_DRY_HOURS", "EDGE_SNAP_MAX_DAYS", "RAIN_EPS_IN"),
-    "selection": ("CON15_OBJ_FRACTION", "USE_TRAINING_PEAK_FILTER", "CON15_NEAR_TIE_ALLOWANCE",
-                  "CON15_FILTER_FRACTION", "MAX_TRAINING_PEAK_ERROR"),
-    "reporting": ("DISPLAY_MAX_POINTS",),
-}
-
-
-def _validate_peak_preference(controls: Mapping[str, Any]) -> None:
-    if not controls["USE_TRAINING_PEAK_FILTER"]:
-        return
-    max_error, allowance = controls["MAX_TRAINING_PEAK_ERROR"], controls["CON15_NEAR_TIE_ALLOWANCE"]
-    if not np.isfinite(max_error) or max_error < 0:
-        raise ValueError("MAX_TRAINING_PEAK_ERROR must be finite and nonnegative")
-    if not np.isfinite(allowance) or not 0 <= allowance <= 1:
-        raise ValueError("CON15_NEAR_TIE_ALLOWANCE must be finite and in [0, 1]")
-
-
-def study_settings_from_controls(controls: Mapping[str, Any]) -> StudySettings:
-    """Translate the notebook's named controls without capturing kernel state.
-
-    Only whitelisted workflow controls are persisted; credentials and other
-    notebook variables are never included. Snow overrides are resolved here,
-    before the conservative melt envelope is frozen.
-    """
-    _validate_peak_preference(controls)
-    snow_values = {}
-    overrides = controls["PARAMETER_OVERRIDES"]
-    snow_active = controls["SNOW_ENABLED"] and controls["CALIBRATE_SNOW"]
-    for name in ("snow_T", "snow_ddf"):
-        options = overrides.get(name, {})
-        if options and not snow_active:
-            raise ValueError("Snow parameter overrides require enabled snow calibration")
-        ParameterSettings(**options)
-        for option, suffix in (("value", "value"), ("lower_bound", "lower"), ("upper_bound", "upper")):
-            snow_values[f"{name}_{suffix}"] = (
-                options[option] if options.get(option) is not None else controls[f"{name}_{suffix}"])
-    if snow_active:
-        lo, hi = snow_values["snow_T_lower"], snow_values["snow_T_upper"]
-        dlo, dhi = snow_values["snow_ddf_lower"], snow_values["snow_ddf_upper"]
-        if not (np.isfinite([lo, hi, dlo, dhi]).all() and lo < hi and 0 <= dlo < dhi
-                and lo <= snow_values["snow_T_value"] <= hi
-                and dlo <= snow_values["snow_ddf_value"] <= dhi):
-            raise ValueError("Snow starts must lie within finite ordered calibration bounds")
-    modules = ModelSettings(
-        groundwater_enabled=controls["GROUNDWATER_ENABLED"], n_triangles=controls["N_RTK_TRIANGLES"],
-        seasonal_baseline=controls["SEASONAL_BASELINE"],
-        background_window_days=controls["BACKGROUND_WINDOW_DAYS"],
-        background_minimum_days=controls["BACKGROUND_MINIMUM_DAYS"],
-        background_max_gap_days=controls["BACKGROUND_MAX_GAP_DAYS"],
-        background_endpoint_hold_days=controls["BACKGROUND_ENDPOINT_HOLD_DAYS"],
-        snow_enabled=controls["SNOW_ENABLED"], calibrate_snow=snow_active,
-        snow_threshold_c=snow_values["snow_T_value"], snow_melt_factor=snow_values["snow_ddf_value"])
-    nsga, cma, de = controls["NSGA2_SETTINGS"], controls["CMA_ES_SETTINGS"], controls["DE_SETTINGS"]
-    calibration = CalibrationSettings(
-        scoring_mode=controls["SCORING_MODE"], solver=controls["SOLVER"],
-        objectives=tuple([controls["SINGLE_OBJECTIVE"]] if controls["SCORING_MODE"] == "single"
-                         else controls["MULTIOBJECTIVE_OBJECTIVES"]),
-        population=nsga["pop_size"], generations=nsga["generations"], seed=nsga["seed"],
-        workers=controls["CALIBRATION_WORKERS"], cma_trials=cma["cma_n_trials"],
-        cma_starts=cma["cma_multi_start"], cma_jobs=cma["cma_n_jobs"], cma_seed=cma["cma_seed"],
-        cma_offspring_size=cma["cma_offspring_size"], cma_progress_every=cma["cma_progress_every"],
-        de_maxiter=de["de_maxiter"], de_popsize=de["de_popsize"], de_polish=de["de_polish"])
-    names = ["s_max", "ia_k_dep", "ia_k0", "ia_kT", "ia_theta", "ia_T_ref", "ia_T_freeze", "area_acres"]
-    if modules.groundwater_enabled:
-        names += ["k_div", "k_G", "g_max"]
-    # The settings page exposes four pathways; later ones use model defaults or explicit overrides.
-    for i in range(1, min(modules.n_triangles, 4) + 1):
-        names += [f"R_{i}", f"uh{i}_T", f"uh{i}_K"]
-    if snow_active:
-        names += ["snow_T", "snow_ddf"]
-    values = {**controls, **snow_values}
-    parameters = {}
-    for name in names:
-        options = dict(lower_bound=values[f"{name}_lower"], upper_bound=values[f"{name}_upper"])
-        if f"{name}_value" in values:
-            options["value"] = values[f"{name}_value"]
-        parameters[name] = options
-    parameters["area_acres"]["calibrate"] = controls["CALIBRATE_AREA"]
-    for name, options in overrides.items():
-        parameters.setdefault(name, {}).update(options)
-    return StudySettings(
-        model=modules, calibration=calibration,
-        parameters={name: ParameterSettings(**options) for name, options in parameters.items()},
-        workflow={page: {name: controls[name] for name in fields}
-                  for page, fields in WORKFLOW_FIELDS.items()})
-
-
-def split_config_from_settings(study: StudySettings, dt_hours: float) -> SplitConfig:
-    """Build the existing forcing-only split, retaining even small melt pulses."""
-    holdout, simulation = study.workflow["holdout"], study.workflow["simulation"]
-    return SplitConfig(
-        dt_hours=dt_hours, warmup_days=simulation["WARMUP_DAYS"], spinup_mode=simulation["SPINUP_MODE"],
-        split_mode=holdout["SPLIT_MODE"], train_frac=holdout["TRAIN_FRAC"],
-        block_days=holdout["STRAT_BLOCK_DAYS"], val_every=holdout["VAL_EVERY"],
-        snap_edges_to_dry=holdout["SNAP_EDGES_TO_DRY"], edge_dry_hours=holdout["EDGE_DRY_HOURS"],
-        edge_snap_max_days=holdout["EDGE_SNAP_MAX_DAYS"],
-        rain_eps=0.0 if study.model.snow_enabled else holdout["RAIN_EPS_IN"])
 
 
 def _event_path(value: str | None, directory: Path, name: str) -> Path:

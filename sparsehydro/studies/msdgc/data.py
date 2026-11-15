@@ -11,12 +11,10 @@ import sys
 import numpy as np
 import pandas as pd
 
-from .services import DownloadResult, FlowFinityClient
+from sparsehydro.data.assembly import describe_results
+from sparsehydro.data.services import DownloadResult, FlowFinityClient
 
 
-from .assembly import (  # noqa: F401 - re-exported until the study package owns this module
-    TIMESTEPS, assemble_modeling_data, describe_results, modeling_timestep, read_local_results,
-)
 
 
 @dataclass

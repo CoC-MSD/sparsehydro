@@ -19,17 +19,20 @@ import pandas as pd
 
 import sparsehydro.models.abstraction.soil_groundwater as _physics_module
 import sparsehydro.models.presets.wholeflow as _pattern_module
-from sparsehydro.configuration import StudySettings
+from sparsehydro.studies.msdgc.settings import StudySettings
 from sparsehydro.units import MGD_TO_CFS
 from sparsehydro.data.utilities import write_tsf
 from sparsehydro.models.abstraction.soil_groundwater import HAS_NUMBA as _HAS_NUMBA, soil_groundwater_core as _gwi_B_core
 from sparsehydro.models.baseflow import PatternEstimate
 from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
-from .msdgc_assessment import MSDGCAssessment
-from .msdgc_pareto import MSDGC_METRIC_ORDER, rank_msdgc_pareto
-from .pattern_workflow import PreparedPatternData, PatternCalibration, PatternEventCoverage
-from .wholeflow_acceptance import AcceptanceContract
-from .wholeflow_workflow import passing_pareto_metrics, hydrograph_diagnostics
+from sparsehydro.studies.msdgc.assessment import MSDGCAssessment
+from sparsehydro.studies.msdgc.pareto import MSDGC_METRIC_ORDER, rank_msdgc_pareto
+from sparsehydro.studies.msdgc.workflow import PreparedPatternData, PatternCalibration, PatternEventCoverage
+from sparsehydro.studies.msdgc.assessment import AcceptanceContract
+from sparsehydro.calibration.result import CalibrationResult
+from sparsehydro.metrics.functions import concordance_correlation, nash_sutcliffe, pbias
+from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
+from sparsehydro.studies.msdgc.assessment import AcceptanceEvaluator
 from sparsehydro.calibration.diagnostics import parameter_table
 
 
@@ -465,3 +468,68 @@ def export_pattern_tsf(prepared: PreparedPatternData, prediction: pd.DataFrame, 
         print(f"TSF{_suffix} period (warmup excluded): {_tsf_predictions.index[0]} -> "
               f"{_tsf_predictions.index[-1]}")
     return tsf_paths, best_tsf_paths
+
+
+def passing_pareto_metrics(
+    result: CalibrationResult,
+    model: CompactWholeFlowModel,
+    pareto_solutions: pd.DataFrame,
+    evaluators: dict[str, AcceptanceEvaluator],
+) -> pd.DataFrame:
+    """Report all filter-passing final candidates without selecting or refitting.
+
+    Call only after selection when the training filter is enabled. Re-simulate
+    each passing vector on a private model, then report each evaluator's declared
+    metric set for each split, including all three zones for MSDGCAssessment.
+    Validation/whole scores are diagnostic only. The filter's independently
+    configured slope/error is included, not substituted for standard Con15.
+    Zero passes returns a typed-column empty table without any simulations.
+    """
+    if (len(pareto_solutions) != len(result.pareto_X)
+            or not np.array_equal(pareto_solutions["pareto_index"].to_numpy(),
+                                  np.arange(len(result.pareto_X)))):
+        raise ValueError("Pareto report rows must align with the complete final front")
+    if not pareto_solutions["filter_enabled"].all():
+        raise ValueError("Passing Pareto metrics require the training peak filter")
+    metrics = next(iter(evaluators.values())).report_metric_names if evaluators else ()
+    if any(evaluator.report_metric_names != metrics for evaluator in evaluators.values()):
+        raise ValueError("Pareto report evaluators must use the same metric definitions")
+    columns = ["pareto_index", "selected", "filter_peak_slope", "filter_peak_error"]
+    for split in evaluators:
+        for metric in metrics:
+            columns.extend([f"{split}_{metric}", f"{split}_{metric}_status",
+                            f"{split}_{metric}_n", f"{split}_{metric}_reason"])
+    passing = pareto_solutions.loc[pareto_solutions["filter_pass"].fillna(False)]
+    if passing.empty:
+        return pd.DataFrame(columns=columns)
+    worker = copy.deepcopy(model)
+    rows = []
+    for candidate in passing.itertuples():
+        index = int(candidate.pareto_index)
+        for name, value in zip(result.param_names, result.pareto_X[index]):
+            worker.apply_flat_parameter(name, float(value))
+        prediction = worker.predict_total_cfs()
+        row = dict(pareto_index=index, selected=bool(candidate.selected),
+                   filter_peak_slope=float(candidate.filter_peak_slope),
+                   filter_peak_error=float(candidate.filter_peak_error))
+        for split, evaluator in evaluators.items():
+            scores = evaluator.metrics(prediction).set_index("metric")
+            for metric in metrics:
+                score = scores.loc[metric]
+                row.update({
+                    f"{split}_{metric}": score["value"],
+                    f"{split}_{metric}_status": score["status"],
+                    f"{split}_{metric}_n": score["n"],
+                    f"{split}_{metric}_reason": score["reason"],
+                })
+        rows.append(row)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def hydrograph_diagnostics(observed: np.ndarray, modeled: np.ndarray) -> dict:
+    x, y = np.asarray(observed), np.asarray(modeled)
+    if not len(x) or not np.isfinite(x).all() or not np.isfinite(y).all():
+        return {"ccc": np.nan, "nse": np.nan, "bias_pct": np.nan, "n": len(x)}
+    return dict(ccc=concordance_correlation(x, y, undefined="nan"),
+                nse=nash_sutcliffe(x, y, undefined="nan"),
+                bias_pct=pbias(x, y, undefined="nan"), n=len(x))

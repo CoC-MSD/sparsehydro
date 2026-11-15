@@ -7,9 +7,8 @@ import pandas as pd
 import pytest
 
 from sparsehydro.calibration import CalibrationProblem, ConcordanceCorrelationCoefficient, NashSutcliffe
-from sparsehydro.calibration.msdgc_assessment import (
-    CFS_H_TO_MG, MSDGCAssessment, MSDGCCon15, MSDGCSettings, _zone_window,
-)
+from sparsehydro.units import CFS_H_TO_MG
+from sparsehydro.studies.msdgc.assessment import MSDGCAssessment, MSDGCCon15, MSDGCSettings, _zone_window
 from sparsehydro.models import SeasonalityModel
 
 

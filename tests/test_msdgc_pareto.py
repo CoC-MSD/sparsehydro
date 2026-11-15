@@ -4,10 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.msdgc_assessment import MSDGCAssessment
-from sparsehydro.calibration.msdgc_pareto import MSDGC_METRIC_ORDER, evaluate_msdgc_pareto, rank_msdgc_pareto
+from sparsehydro.studies.msdgc.assessment import MSDGCAssessment
+from sparsehydro.studies.msdgc.pareto import MSDGC_METRIC_ORDER, evaluate_msdgc_pareto, rank_msdgc_pareto
 from sparsehydro.calibration.result import CalibrationResult
-from sparsehydro.calibration.wholeflow_acceptance import AcceptanceContract
+from sparsehydro.studies.msdgc.assessment import AcceptanceContract
 from sparsehydro.models.baseflow import CenteredWeeklyPattern
 from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 

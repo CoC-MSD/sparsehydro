@@ -5,13 +5,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sparsehydro.calibration.pattern_workflow import (
-    PreparedPatternData, PatternEventCoverage, build_pattern_event_coverage,
-    build_pattern_model, build_pattern_objectives, calibrate_pattern_model,
-    prepare_pattern_data, study_settings_from_controls,
-)
-from sparsehydro.calibration.pattern_reporting import assess_pattern_prediction, export_pattern_report
-from sparsehydro.calibration.msdgc_assessment import MSDGCSettings
+from sparsehydro.studies.msdgc.workflow import PreparedPatternData, PatternEventCoverage, build_pattern_event_coverage, build_pattern_model, build_pattern_objectives, calibrate_pattern_model, prepare_pattern_data
+from sparsehydro.studies.msdgc.settings import study_settings_from_controls
+from sparsehydro.studies.msdgc.reporting import assess_pattern_prediction, export_pattern_report
+from sparsehydro.studies.msdgc.assessment import MSDGCSettings
 from sparsehydro.calibration.splits import SplitConfig
 from sparsehydro.calibration.diagnostics import parameter_table
 from sparsehydro.models.baseflow import CenteredWeeklyPattern, PatternEstimate

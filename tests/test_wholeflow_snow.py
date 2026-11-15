@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.wholeflow_workflow import snow_melt_envelope
+from sparsehydro.studies.msdgc.events import snow_melt_envelope
 from sparsehydro.calibration.splits.masks import dry_weather_mask, melt_scoring_mask
 from sparsehydro.models.forcing import SnowConfig, snow_partition
 from sparsehydro.models.abstraction.soil_groundwater import soil_groundwater_core as _gwi_B_core

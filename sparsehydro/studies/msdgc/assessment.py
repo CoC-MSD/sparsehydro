@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import math
 from typing import ClassVar
@@ -9,12 +10,93 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
-from ..metrics.functions import concordance_correlation, peak_regression_slope, top_peak_indices
-from ..metrics.objectives import Con15
-from .wholeflow_acceptance import AcceptanceContract, AcceptanceEvaluator
+from sparsehydro.metrics.functions import concordance_correlation, peak_regression_slope, top_peak_indices
+from sparsehydro.metrics.objectives import Con15
 
 
-from ..units import CFS_H_TO_MG  # noqa: E402,F401 - re-exported
+from sparsehydro.units import CFS_H_TO_MG  # noqa: E402,F401 - re-exported
+
+
+@dataclass(frozen=True)
+class AcceptanceContract:
+    ccc_min: float = 0.90
+    con15_tolerance: float = 0.10
+    top_fraction: float = 0.15
+    version: str = "total-events-conveyance-volume-v2"
+
+    def __post_init__(self) -> None:
+        if not (0 < self.ccc_min <= 1 and 0 < self.top_fraction <= 1 and self.con15_tolerance > 0):
+            raise ValueError("Invalid acceptance tolerances")
+
+
+class AcceptanceEvaluator(ABC):
+    """Shared event inventory; subclasses supply current assessment formulas."""
+
+    def __init__(
+        self, observed: np.ndarray, events: pd.DataFrame, score_mask: np.ndarray,
+        dry_mask: np.ndarray, dt_hours: float, contract: AcceptanceContract, *,
+        allow_overlapping_events: bool = False,
+    ):
+        self.observed = np.asarray(observed, float).copy()
+        self.events = events.copy()
+        self.mask = np.asarray(score_mask, bool).copy()
+        self.dry = np.asarray(dry_mask, bool) & self.mask
+        self.dt, self.contract = dt_hours, contract
+        if (
+            self.observed.ndim != 1 or self.mask.shape != self.observed.shape
+            or self.dry.shape != self.mask.shape or not np.isfinite(dt_hours) or dt_hours <= 0
+        ):
+            raise ValueError("Invalid score masks or timestep")
+        previous_start, previous_end = -1, -1
+        for event in self.events.itertuples():
+            if not (
+                isinstance(event.start_idx, (int, np.integer))
+                and isinstance(event.end_idx, (int, np.integer))
+                and 0 <= event.start_idx <= event.end_idx < len(self.observed)
+            ):
+                raise ValueError("Event outside observation domain or non-integer event indices")
+            if event.start_idx < previous_start:
+                raise ValueError("Assessment events must be ordered by start")
+            if not allow_overlapping_events and event.start_idx <= previous_end:
+                raise ValueError("Assessment events must be ordered and disjoint")
+            if not self.mask[event.start_idx:event.end_idx + 1].all():
+                raise ValueError("A scored event must contain only rows from its own split")
+            previous_start, previous_end = event.start_idx, event.end_idx
+        self.obs_volumes, self.obs_peaks = self._event_values(self.observed)
+
+    def _event_values(self, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        volumes, peaks = [], []
+        for event in self.events.itertuples():
+            q = values[event.start_idx:event.end_idx + 1]
+            volumes.append(float(q.sum() * self.dt))
+            peaks.append(float(q.max()))
+        return np.asarray(volumes), np.asarray(peaks)
+
+    @staticmethod
+    def _row(name: str, value: float, lower: float, upper: float, count: int, reason: str) -> dict:
+        finite = np.isfinite(value)
+        passed = finite and lower - 1e-12 <= value <= upper + 1e-12
+        return dict(
+            metric=name, value=value, lower=lower, upper=upper, n=count,
+            status="pass" if passed else "fail" if finite else "undefined",
+            reason="" if finite else reason,
+        )
+
+    def event_report(self, prediction: np.ndarray) -> pd.DataFrame:
+        volumes, peaks = self._event_values(np.asarray(prediction))
+        out = self.events.copy()
+        out["observed_volume_cfs_h"], out["modeled_volume_cfs_h"] = self.obs_volumes, volumes
+        out["observed_peak_cfs"], out["modeled_peak_cfs"] = self.obs_peaks, peaks
+        out["con15_selected"] = False
+        return out
+
+    @abstractmethod
+    def metrics(self, prediction: np.ndarray) -> pd.DataFrame:
+        """Return the current assessment's aggregate metrics."""
+
+    @abstractmethod
+    def conveyance_report(self, prediction: np.ndarray) -> pd.DataFrame:
+        """Return the current assessment's event conveyance volumes."""
 
 
 @dataclass(frozen=True)
@@ -43,65 +125,6 @@ class MSDGCSettings:
             self.minimum_minutes[i], self.maximum_minutes[i],
         ))
         return minutes, int(round(minutes / (dt_hours * 60)))
-
-
-def assessment_event_inventory(
-    times: pd.DatetimeIndex, approved: pd.DataFrame,
-    train: np.ndarray, validation: np.ndarray, *,
-    excluded_event_ids: tuple[str, ...] = ("87",),
-    full_inventory: pd.DataFrame | None = None,
-) -> pd.DataFrame:
-    """Preserve source approval and audit exclusions without changing fitting masks.
-
-    Hybrid assessment uses full EVT timestamps for approved IDs. Like MSDGC's
-    lookup, the scan includes the first native sample on or after the end.
-    Whole-event split/quality checks include that sample; no clipping or leakage.
-    """
-    times = pd.DatetimeIndex(times)
-    train, validation = np.asarray(train, bool), np.asarray(validation, bool)
-    if (len(times) < 2 or times.hasnans or times.has_duplicates
-            or not times.is_monotonic_increasing or times.tz is not None
-            or train.shape != (len(times),) or validation.shape != train.shape
-            or (train & validation).any()):
-        raise ValueError("Assessment requires ordered native timestamps and aligned disjoint split masks")
-    source = approved.copy()
-    if source.event_id.astype(str).duplicated().any():
-        raise ValueError("Assessment event IDs must be unique")
-    source["source_start"], source["source_end"] = source["start"], source["end"]
-    source["assessment_window_source"] = "approved"
-    if full_inventory is not None:
-        full = full_inventory.copy()
-        full.index = full.event_id.astype(str)
-        if full.index.has_duplicates or not source.event_id.astype(str).isin(full.index).all():
-            raise ValueError("Full EVT inventory must contain each approved event ID exactly once")
-        for column in ("start", "end"):
-            source[column] = source.event_id.astype(str).map(full[column])
-        source["assessment_window_source"] = "full_evt"
-    excluded = set(map(str, excluded_event_ids))
-    for index, event in source.iterrows():
-        start = int(times.searchsorted(event["start"], side="left"))
-        end = int(times.searchsorted(event["end"], side="left"))
-        reason = str(event["exclusion"]) if not event["eligible"] else ""
-        if str(event["event_id"]) in excluded:
-            reason = ";".join(filter(None, [reason, "assessment_criteria_exclusion"]))
-        split = "excluded"
-        if event["start"] < times[0] or event["end"] > times[-1]:
-            reason = reason or "outside_model_record"
-        elif end - start + 1 < 2:
-            reason = reason or "insufficient_model_samples"
-        elif train[start:end + 1].all():
-            split = "train"
-        elif validation[start:end + 1].all():
-            split = "validation"
-        else:
-            reason = reason or "assessment_endpoint_crosses_split_or_unscored"
-        source.loc[index, ["start_idx", "end_idx", "split", "eligible", "exclusion"]] = [
-            start, end, split, not reason, reason,
-        ]
-    source["duration_hours"] = (
-        (pd.to_datetime(source["end"]) - pd.to_datetime(source["start"])).dt.total_seconds() / 3600
-    ).round(2)
-    return source
 
 
 def _zone_window(
