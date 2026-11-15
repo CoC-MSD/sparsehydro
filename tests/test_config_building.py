@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
+from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
 from sparsehydro.calibration.solvers import PlatypusCmaEsSolver
 from sparsehydro.configuration import build_model, build_objectives, build_solver, load_config
 from sparsehydro.models.abstraction import ExternalExcess

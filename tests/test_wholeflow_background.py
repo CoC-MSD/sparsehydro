@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.objectives import NashSutcliffe
+from sparsehydro.metrics.objectives import NashSutcliffe
 from sparsehydro.calibration.solvers.scipy_solver import ScipySolver
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.configuration import ModelSettings, ParameterSettings, StudySettings

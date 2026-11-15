@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
+from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
 from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.enums import ModelState

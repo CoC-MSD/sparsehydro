@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.objectives import NashSutcliffe
+from sparsehydro.metrics.objectives import NashSutcliffe
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.configuration import CalibrationSettings, GROUNDWATER_PARAMETERS, ModelSettings, ParameterSettings, StudySettings
 from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
@@ -352,7 +352,7 @@ def test_notebook_snow_bound_overrides_are_applied_before_frozen_masks():
 @pytest.mark.parametrize("method", ["spea2", "differential_evolution"])
 def test_notebook_alternative_solver_runs_four_pathway_core(tmp_path, method):
     from sparsehydro.calibration.msdgc_assessment import MSDGCSettings
-    from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, PBIAS
+    from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, PBIAS
     from sparsehydro.models.rdii.initial_abstraction import snow_partition
 
     ns = notebook_namespace()

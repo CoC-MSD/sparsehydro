@@ -214,7 +214,7 @@ class TestObjectives(unittest.TestCase):
         self.assertGreater(PeakWeightedMSE().evaluate(obs, pred), 0.0)
 
     def test_peak_weighted_mse_power_default_matches_linear(self):
-        from sparsehydro.calibration.objectives import _peak_weighted_mse
+        from sparsehydro.metrics.functions import peak_weighted_mse as _peak_weighted_mse
         obs = np.array([1.0, 3.0, 5.0, 2.0])
         pred = np.array([1.0, 2.0, 4.0, 2.5])
         self.assertAlmostEqual(

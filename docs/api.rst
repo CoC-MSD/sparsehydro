@@ -527,7 +527,7 @@ abstractions for parameter estimation:
   :class:`~sparsehydro.models.IModel` with observed data and objectives.
 * :class:`~sparsehydro.calibration.result.CalibrationResult` — stores the
   Pareto front, per-generation history, and metadata.
-* A library of :class:`~sparsehydro.calibration.objectives.IObjective`
+* A library of :class:`~sparsehydro.metrics.objectives.IObjective`
   implementations covering MSE, NSE, KGE, and more.
 * Multiple solver backends (see :ref:`Solvers` below).
 
@@ -575,7 +575,7 @@ Objectives
 | :class:`KGE`                  | Kling-Gupta efficiency (maximise)                 |
 +-------------------------------+---------------------------------------------------+
 
-.. automodule:: sparsehydro.calibration.objectives
+.. automodule:: sparsehydro.metrics.objectives
    :members:
    :show-inheritance:
 

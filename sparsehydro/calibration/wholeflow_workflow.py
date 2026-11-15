@@ -8,9 +8,10 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from sparsehydro.calibration.objectives import Con15
+from sparsehydro.metrics.objectives import Con15
 from sparsehydro.calibration.result import CalibrationResult, GenerationRecord
-from sparsehydro.calibration.wholeflow_acceptance import AcceptanceEvaluator, lin_ccc
+from sparsehydro.calibration.wholeflow_acceptance import AcceptanceEvaluator
+from sparsehydro.metrics.functions import concordance_correlation
 from sparsehydro.events.msdgc import find_events
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
 from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel
@@ -439,7 +440,7 @@ def hydrograph_diagnostics(observed: np.ndarray, modeled: np.ndarray) -> dict:
     if not len(x) or not np.isfinite(x).all() or not np.isfinite(y).all():
         return {"ccc": np.nan, "nse": np.nan, "bias_pct": np.nan, "n": len(x)}
     denominator = float(np.sum((x - x.mean()) ** 2))
-    return dict(ccc=lin_ccc(x, y), nse=1 - float(np.sum((y - x) ** 2)) / denominator if denominator > 0 else np.nan,
+    return dict(ccc=concordance_correlation(x, y, undefined="nan"), nse=1 - float(np.sum((y - x) ** 2)) / denominator if denominator > 0 else np.nan,
                 bias_pct=100 * float((y - x).sum() / x.sum()) if x.sum() > 0 else np.nan, n=len(x))
 
 

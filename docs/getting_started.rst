@@ -326,7 +326,7 @@ It can be passed unchanged to *any* solver.
 Objective Functions
 ~~~~~~~~~~~~~~~~~~~
 
-All objectives implement :class:`~sparsehydro.calibration.objectives.IObjective`.
+All objectives implement :class:`~sparsehydro.metrics.objectives.IObjective`.
 Minimisation and maximisation are handled automatically — the calibration engine
 always minimises internally and converts back for display.
 

@@ -9,8 +9,9 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
-from .objectives import Con15, _peak_regression_slope, _top_peak_indices
-from .wholeflow_acceptance import AcceptanceContract, AcceptanceEvaluator, lin_ccc
+from ..metrics.functions import concordance_correlation, peak_regression_slope, top_peak_indices
+from ..metrics.objectives import Con15
+from .wholeflow_acceptance import AcceptanceContract, AcceptanceEvaluator
 
 
 CFS_H_TO_MG = 7.480519 * 3600 / 1e6
@@ -268,7 +269,7 @@ class MSDGCAssessment(AcceptanceEvaluator):
         out = super().event_report(prediction)
         bands = self.conveyance_report(prediction)
         x = bands["observed_volume_mg"].to_numpy(dtype=float)
-        selected = (_top_peak_indices(x, self.contract.top_fraction)
+        selected = (top_peak_indices(x, self.contract.top_fraction)
                     if np.isfinite(x).all() else np.empty(0, dtype=int))
         out["con15_selected"] = False
         out.iloc[selected, out.columns.get_loc("con15_selected")] = True
@@ -285,7 +286,7 @@ class MSDGCAssessment(AcceptanceEvaluator):
             x = part.observed_volume_mg.to_numpy(dtype=float)
             y = part.modeled_volume_mg.to_numpy(dtype=float)
             # The tool's Pearson-times-bias expression is undefined for either constant series.
-            value = (lin_ccc(x, y) if len(x) >= 2 and np.var(x) > 0 and np.var(y) > 0
+            value = (concordance_correlation(x, y, undefined="nan") if len(x) >= 2 and np.var(x) > 0 and np.var(y) > 0
                      else math.nan)
             row = self._row(f"{zone}_ccc", value, self.contract.ccc_min, 1, len(part),
                             "Incomplete bands, fewer than two events, or constant/non-finite volume pairs")
@@ -300,13 +301,13 @@ class MSDGCAssessment(AcceptanceEvaluator):
         slope = math.nan
         selected = np.empty(0, dtype=int)
         if np.isfinite(x).all():
-            selected = _top_peak_indices(x, self.contract.top_fraction)
-            slope = _peak_regression_slope(x[selected], y[selected])
+            selected = top_peak_indices(x, self.contract.top_fraction)
+            slope = peak_regression_slope(x[selected], y[selected])
         rows.append(self._row("con15_slope", slope, 1 - self.contract.con15_tolerance,
                               1 + self.contract.con15_tolerance, len(selected),
                               "Incomplete selected bands or zero observed conveyance-volume energy"))
         volumes, _ = self._event_values(np.asarray(prediction, float))
-        rows.append(self._row("event_volume_ccc", lin_ccc(self.obs_volumes, volumes),
+        rows.append(self._row("event_volume_ccc", concordance_correlation(self.obs_volumes, volumes, undefined="nan"),
                               self.contract.ccc_min, 1, len(volumes),
                               "Fewer than two complete finite events or degenerate full-event volumes"))
         for row in rows:

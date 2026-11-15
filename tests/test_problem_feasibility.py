@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.objectives import MSE
+from sparsehydro.metrics.objectives import MSE
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.enums import ModelState
 from sparsehydro.models.base import IModel

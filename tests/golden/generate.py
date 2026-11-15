@@ -20,7 +20,7 @@ Four fixture files are written next to this module:
     ``predict()["Q_pred"]`` for every UH case over two synthetic rain series,
     plus the composite / ensemble / RDII models.
 ``objectives.npz``
-    Every objective in :mod:`sparsehydro.calibration.objectives` over a fixed
+    Every objective in :mod:`sparsehydro.metrics.objectives` over a fixed
     observed/predicted pair, including NaN, ``+inf`` and all-masked edge cases.
 ``evaluate.npz``
     Full ``CalibrationProblem.evaluate(x)`` objective vectors -- the pin that
@@ -168,7 +168,7 @@ def _objective_instances() -> list[tuple[str, object]]:
     :returns: List of labelled objective instances.
     :rtype: list[tuple[str, object]]
     """
-    from sparsehydro.calibration.objectives import (
+    from sparsehydro.metrics.objectives import (
         MSE, RMSE, WeightedRMSE, MAE, PeakWeightedMSE, NashSutcliffe, KGE,
         PBIAS, VolumeRelativeError, LogNSE, IndexOfAgreement,
         ConcordanceCorrelationCoefficient,
@@ -260,7 +260,7 @@ def build_evaluate() -> dict[str, np.ndarray]:
     :rtype: dict[str, numpy.ndarray]
     """
     from sparsehydro.calibration import CalibrationProblem
-    from sparsehydro.calibration.objectives import (
+    from sparsehydro.metrics.objectives import (
         WeightedRMSE, RMSE, NashSutcliffe, KGE,
     )
     from sparsehydro.models import AbstractionUHModel

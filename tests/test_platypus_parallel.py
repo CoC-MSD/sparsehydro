@@ -7,7 +7,7 @@ import pytest
 
 platypus = pytest.importorskip("platypus")
 
-from sparsehydro.calibration.objectives import MSE, NashSutcliffe
+from sparsehydro.metrics.objectives import MSE, NashSutcliffe
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
 from sparsehydro.enums import ModelState

@@ -4,30 +4,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import math
 
 import numpy as np
 import pandas as pd
 
-from .objectives import _concordance_correlation_coefficient
-
-
-def lin_ccc(observed: np.ndarray, modeled: np.ndarray) -> float:
-    """Lin's CCC for reporting: incomplete or degenerate pairs give NaN.
-
-    Uses the same formula as the ``ccc`` calibration objective
-    (:class:`~sparsehydro.calibration.objectives.ConcordanceCorrelationCoefficient`),
-    which raises instead of returning NaN.
-    """
-    x, y = np.asarray(observed, float), np.asarray(modeled, float)
-    if x.shape != y.shape:
-        raise ValueError("CCC arrays must align")
-    if x.size < 2 or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
-        return math.nan
-    try:
-        return _concordance_correlation_coefficient(x, y)
-    except ValueError:  # zero denominator
-        return math.nan
 
 
 @dataclass(frozen=True)

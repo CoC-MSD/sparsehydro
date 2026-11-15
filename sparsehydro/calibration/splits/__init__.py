@@ -27,7 +27,7 @@ from .blocks import (
     wrap_seasonal_slip_days,
 )
 from .events import EventSplit, estimate_recession_hours, stratified_event_split
-from .metrics import per_event_scores, summarize_event_scores
+from ...metrics.events import per_event_scores, summarize_event_scores
 
 __all__ = [
     "SPINUP_MODES",

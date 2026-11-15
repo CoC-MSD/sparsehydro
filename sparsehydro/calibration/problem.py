@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any, Callable, Union
 import numpy as np
 import pandas as pd
 
-from .objectives import IObjective
+from ..metrics.objectives import IObjective
 
 if TYPE_CHECKING:
     from ..models import IModel

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.objectives import NashSutcliffe
+from sparsehydro.metrics.objectives import NashSutcliffe
 from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.models import SeasonalityModel
 from sparsehydro.models.abstraction import ExternalExcess

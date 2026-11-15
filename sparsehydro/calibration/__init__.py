@@ -91,7 +91,7 @@ Public API
 """
 
 from .callbacks import ProgressCallback
-from .objectives import (
+from ..metrics.objectives import (
     IObjective,
     KGE,
     MAE,

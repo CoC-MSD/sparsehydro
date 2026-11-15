@@ -117,7 +117,7 @@ def test_evaluate_fast_and_fallback_agree():
     down the DataFrame extractor path; both must agree bit-for-bit.
     """
     from sparsehydro.calibration import CalibrationProblem
-    from sparsehydro.calibration.objectives import (
+    from sparsehydro.metrics.objectives import (
         WeightedRMSE, RMSE, NashSutcliffe, KGE,
     )
 
@@ -283,7 +283,7 @@ def test_evaluate_constructs_no_dataframes(composite):
     reintroduces a per-evaluation frame.
     """
     from sparsehydro.calibration import CalibrationProblem
-    from sparsehydro.calibration.objectives import RMSE, NashSutcliffe
+    from sparsehydro.metrics.objectives import RMSE, NashSutcliffe
 
     df = _rain_df().assign(
         obs=np.random.default_rng(5).gamma(2.0, 1.0, N),

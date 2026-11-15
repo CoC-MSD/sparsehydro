@@ -38,7 +38,7 @@ from typing import Any, ClassVar
 
 import numpy as np
 
-from sparsehydro.calibration.objectives import (
+from sparsehydro.metrics.objectives import (
     ConcordanceCorrelationCoefficient, IObjective, NashSutcliffe, PBIAS, PeakWeightedMSE,
 )
 from sparsehydro.calibration.solvers.base import ISolver
@@ -155,7 +155,7 @@ def build_objectives(specs: Sequence[Any], masks: Mapping[str, Any] | None = Non
 
     :raises KeyError: For an unknown objective or mask name.
     """
-    from sparsehydro.calibration.objectives import objective_registry
+    from sparsehydro.metrics.objectives import objective_registry
 
     masks = dict(masks or {})
     objectives = []

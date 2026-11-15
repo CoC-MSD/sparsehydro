@@ -21,7 +21,7 @@ from scipy.optimize import Bounds, minimize as scipy_minimize
 from scipy.optimize import differential_evolution
 from scipy.signal import savgol_filter
 
-from ...calibration.objectives import RMSE, KGE, NashSutcliffe, WeightedRMSE, IObjective
+from ...metrics.objectives import RMSE, KGE, NashSutcliffe, WeightedRMSE, IObjective
 from ...calibration.problem import CalibrationProblem
 from ...calibration.result import CalibrationResult
 from ..base import IModel

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe, Con15
+from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe, Con15
 from sparsehydro.calibration.msdgc_assessment import CFS_H_TO_MG, MSDGCAssessment, MSDGCSettings
 from sparsehydro.calibration.result import CalibrationResult
 from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
@@ -207,7 +207,7 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
     objective_names, use_filter,
 ):
     import time
-    from sparsehydro.calibration.objectives import PBIAS
+    from sparsehydro.metrics.objectives import PBIAS
 
     if scoring_mode == "single":
         pytest.importorskip("platypus")

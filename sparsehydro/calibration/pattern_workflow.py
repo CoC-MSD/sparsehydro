@@ -24,7 +24,7 @@ from sparsehydro.models.wholeflow_pattern import (
 )
 
 from .msdgc_assessment import MSDGCAssessment, MSDGCCon15, MSDGCSettings, assessment_event_inventory
-from .objectives import ConcordanceCorrelationCoefficient, IObjective, NashSutcliffe
+from ..metrics.objectives import ConcordanceCorrelationCoefficient, IObjective, NashSutcliffe
 from .problem import CalibrationProblem
 from .result import CalibrationResult
 from .solvers.base import ISolver

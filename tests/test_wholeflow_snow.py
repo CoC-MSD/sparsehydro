@@ -307,7 +307,7 @@ def test_envelope_threshold_edges_initial_swe_zero_melt_and_invalid_bounds():
 
 def test_bounded_snow_solver_is_thread_and_holdout_invariant():
     import platypus
-    from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
+    from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
     from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
     from sparsehydro.calibration.problem import CalibrationProblem
 

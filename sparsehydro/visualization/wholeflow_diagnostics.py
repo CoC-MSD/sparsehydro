@@ -13,7 +13,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
+from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
 from sparsehydro.calibration.msdgc_pareto import MSDGC_METRIC_ORDER
 from sparsehydro.calibration.result import CalibrationResult
 from sparsehydro.data.services import DownloadResult

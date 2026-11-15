@@ -29,7 +29,7 @@ from sparsehydro.models.rdii import (
 )
 from sparsehydro.models.rdii import initial_abstraction as _ia_mod
 from sparsehydro.models.rdii.rtk_triangle import _integrate_triangle
-from sparsehydro.calibration.objectives import NashSutcliffe, PeakWeightedMSE
+from sparsehydro.metrics.objectives import NashSutcliffe, PeakWeightedMSE
 
 # Convenience wrappers that match old function-call style used in TestObjectives
 def nash_sutcliffe(obs, pred):

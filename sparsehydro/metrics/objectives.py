@@ -1,4 +1,8 @@
-"""Objective function abstractions for model calibration.
+"""Calibration objectives: metrics with a direction, masks and a registry name.
+
+Each objective wraps a function from :mod:`sparsehydro.metrics.functions` and
+adds what an optimiser needs: ``minimize``, an optional mask, NaN handling and
+a ``name`` for :data:`objective_registry`.
 
 :class:`IObjective` defines the interface that every calibration objective
 must implement.  Concrete subclasses encapsulate both the direction of
@@ -68,6 +72,23 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 import numpy as np
+
+from ..registry import NamedRegistry
+from .functions import (
+    concordance_correlation,
+    index_of_agreement,
+    kge,
+    log_nse,
+    mae,
+    mse,
+    nash_sutcliffe,
+    pbias,
+    peak_regression_slope,
+    peak_weighted_mse,
+    rmse,
+    top_peak_indices,
+    volume_relative_error,
+)
 
 
 class IObjective(ABC):
@@ -240,14 +261,7 @@ class MSE(IObjective):
     minimize = True
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        obs = np.asarray(observed, dtype=float)
-        pred = np.asarray(predicted, dtype=float)
-        if obs.shape != pred.shape:
-            raise ValueError(
-                f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
-            )
-        return float(np.mean((obs - pred) ** 2))
-
+        return mse(observed, predicted)
 
 class RMSE(IObjective):
     """Root mean squared error.
@@ -260,14 +274,7 @@ class RMSE(IObjective):
     minimize = True
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        obs = np.asarray(observed, dtype=float)
-        pred = np.asarray(predicted, dtype=float)
-        if obs.shape != pred.shape:
-            raise ValueError(
-                f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
-            )
-        return float(np.sqrt(np.mean((obs - pred) ** 2)))
-
+        return rmse(observed, predicted)
 
 class WeightedRMSE(IObjective):
     """Weighted root mean squared error with per-timestep weights.
@@ -376,14 +383,7 @@ class MAE(IObjective):
     minimize = True
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        obs = np.asarray(observed, dtype=float)
-        pred = np.asarray(predicted, dtype=float)
-        if obs.shape != pred.shape:
-            raise ValueError(
-                f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
-            )
-        return float(np.mean(np.abs(obs - pred)))
-
+        return mae(observed, predicted)
 
 class PeakWeightedMSE(IObjective):
     """Peak-weighted mean squared error.
@@ -417,7 +417,7 @@ class PeakWeightedMSE(IObjective):
         self.power = float(power)
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        return _peak_weighted_mse(observed, predicted, power=self.power)
+        return peak_weighted_mse(observed, predicted, power=self.power)
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +443,7 @@ class NashSutcliffe(IObjective):
     minimize = False
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        return _nash_sutcliffe(observed, predicted)
+        return nash_sutcliffe(observed, predicted)
 
 
 class KGE(IObjective):
@@ -469,23 +469,7 @@ class KGE(IObjective):
     minimize = False
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        obs = np.asarray(observed, dtype=float)
-        pred = np.asarray(predicted, dtype=float)
-        if obs.shape != pred.shape:
-            raise ValueError(
-                f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
-            )
-        std_obs = float(np.std(obs))
-        mean_obs = float(np.mean(obs))
-        if std_obs == 0.0:
-            raise ValueError("std(observed) == 0; KGE is undefined.")
-        if mean_obs == 0.0:
-            raise ValueError("mean(observed) == 0; KGE bias ratio is undefined.")
-        r = float(np.corrcoef(obs, pred)[0, 1])
-        alpha = float(np.std(pred)) / std_obs
-        beta = float(np.mean(pred)) / mean_obs
-        return float(1.0 - np.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2))
-
+        return kge(observed, predicted)
 
 class PBIAS(IObjective):
     """Absolute percent bias.
@@ -508,7 +492,7 @@ class PBIAS(IObjective):
     minimize = True
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        return _pbias(observed, predicted)
+        return abs(pbias(observed, predicted))
 
 
 class VolumeRelativeError(IObjective):
@@ -531,7 +515,7 @@ class VolumeRelativeError(IObjective):
     minimize = True
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        return _volume_relative_error(observed, predicted)
+        return volume_relative_error(observed, predicted)
 
 
 class LogNSE(IObjective):
@@ -566,7 +550,7 @@ class LogNSE(IObjective):
         self.epsilon = epsilon
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        return _log_nse(observed, predicted, epsilon=self.epsilon)
+        return log_nse(observed, predicted, epsilon=self.epsilon)
 
 
 class IndexOfAgreement(IObjective):
@@ -590,7 +574,7 @@ class IndexOfAgreement(IObjective):
     minimize = False
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        return _index_of_agreement(observed, predicted)
+        return index_of_agreement(observed, predicted)
 
 
 class ConcordanceCorrelationCoefficient(IObjective):
@@ -618,7 +602,7 @@ class ConcordanceCorrelationCoefficient(IObjective):
     minimize = False
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        return _concordance_correlation_coefficient(observed, predicted)
+        return concordance_correlation(observed, predicted)
 
 
 class DisjointWindowCCC(IObjective):
@@ -661,189 +645,6 @@ class DisjointWindowCCC(IObjective):
         return self._w_dry * cd + self._w_storm * cs
 
 
-# ---------------------------------------------------------------------------
-# Pure function implementations (no external dependencies)
-# ---------------------------------------------------------------------------
-
-def _peak_weighted_mse(
-    observed: np.ndarray,
-    predicted: np.ndarray,
-    power: float = 1.0,
-) -> float:
-    """Compute the peak-weighted mean squared error.
-
-    :param observed: 1-D array of observed values.
-    :type observed: numpy.ndarray
-    :param predicted: 1-D array of predicted values (same shape).
-    :type predicted: numpy.ndarray
-    :param power: Exponent applied to the normalised-flow weights (>= 0).
-    :type power: float
-    :returns: Peak-weighted MSE.
-    :rtype: float
-    :raises ValueError: If shapes mismatch, *power* < 0, or observed is all zeros.
-    """
-    obs = np.asarray(observed, dtype=float)
-    pred = np.asarray(predicted, dtype=float)
-    if obs.shape != pred.shape:
-        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
-    if power < 0.0:
-        raise ValueError(f"power must be >= 0; got {power!r}")
-    mean_obs = float(np.mean(obs))
-    if mean_obs == 0.0:
-        raise ValueError("observed is all zeros; peak-weighted MSE is undefined.")
-    weights = (obs / mean_obs) ** power
-    w_sum = float(np.sum(weights))
-    if w_sum == 0.0:
-        return 0.0
-    return float(np.sum(weights * (obs - pred) ** 2) / w_sum)
-
-
-def _nash_sutcliffe(observed: np.ndarray, predicted: np.ndarray) -> float:
-    """Compute the Nash-Sutcliffe efficiency.
-
-    :param observed: 1-D array of observed values.
-    :type observed: numpy.ndarray
-    :param predicted: 1-D array of predicted values (same shape).
-    :type predicted: numpy.ndarray
-    :returns: Nash-Sutcliffe efficiency (1 is perfect).
-    :rtype: float
-    :raises ValueError: If shapes mismatch or the observed series is constant.
-    """
-    obs = np.asarray(observed, dtype=float)
-    pred = np.asarray(predicted, dtype=float)
-    if obs.shape != pred.shape:
-        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
-    ss_res = float(np.sum((obs - pred) ** 2))
-    ss_tot = float(np.sum((obs - np.mean(obs)) ** 2))
-    if ss_tot == 0.0:
-        raise ValueError("SS_tot is zero; observed series is constant — NSE is undefined.")
-    return 1.0 - ss_res / ss_tot
-
-
-def _pbias(observed: np.ndarray, predicted: np.ndarray) -> float:
-    """Compute the absolute percent bias.
-
-    :param observed: 1-D array of observed values.
-    :type observed: numpy.ndarray
-    :param predicted: 1-D array of predicted values (same shape).
-    :type predicted: numpy.ndarray
-    :returns: Absolute percent bias (0 is perfect).
-    :rtype: float
-    :raises ValueError: If shapes mismatch or ``sum(observed)`` is zero.
-    """
-    obs = np.asarray(observed, dtype=float)
-    pred = np.asarray(predicted, dtype=float)
-    if obs.shape != pred.shape:
-        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
-    total_obs = float(np.sum(obs))
-    if total_obs == 0.0:
-        raise ValueError("sum(observed) is zero; PBIAS is undefined.")
-    return float(abs(100.0 * np.sum(obs - pred) / total_obs))
-
-
-def _log_nse(
-    observed: np.ndarray,
-    predicted: np.ndarray,
-    epsilon: float = 0.01,
-) -> float:
-    """Compute the Nash-Sutcliffe efficiency on log-transformed flows.
-
-    :param observed: 1-D array of observed values.
-    :type observed: numpy.ndarray
-    :param predicted: 1-D array of predicted values (same shape).
-    :type predicted: numpy.ndarray
-    :param epsilon: Offset added before the log transform to avoid ``log(0)``.
-    :type epsilon: float
-    :returns: Log-space Nash-Sutcliffe efficiency (1 is perfect).
-    :rtype: float
-    :raises ValueError: If shapes mismatch, *epsilon* <= 0, or the
-        log-transformed observed series is constant.
-    """
-    obs = np.asarray(observed, dtype=float)
-    pred = np.asarray(predicted, dtype=float)
-    if obs.shape != pred.shape:
-        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
-    if epsilon <= 0.0:
-        raise ValueError(f"epsilon must be > 0; got {epsilon!r}")
-    log_obs = np.log(obs + epsilon)
-    log_pred = np.log(np.clip(pred, 0.0, None) + epsilon)
-    ss_res = float(np.sum((log_obs - log_pred) ** 2))
-    ss_tot = float(np.sum((log_obs - np.mean(log_obs)) ** 2))
-    if ss_tot == 0.0:
-        raise ValueError("SS_tot is zero; log-transformed observed series is constant.")
-    return float(1.0 - ss_res / ss_tot)
-
-
-def _volume_relative_error(observed: np.ndarray, predicted: np.ndarray) -> float:
-    """Compute the relative total volume error.
-
-    :param observed: 1-D array of observed values.
-    :type observed: numpy.ndarray
-    :param predicted: 1-D array of predicted values (same shape).
-    :type predicted: numpy.ndarray
-    :returns: Absolute relative volume error (0 is perfect).
-    :rtype: float
-    :raises ValueError: If shapes mismatch or ``sum(observed)`` is zero.
-    """
-    obs = np.asarray(observed, dtype=float)
-    pred = np.asarray(predicted, dtype=float)
-    if obs.shape != pred.shape:
-        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
-    total_obs = float(np.sum(obs))
-    if total_obs == 0.0:
-        raise ValueError("sum(observed) is zero; volume relative error is undefined.")
-    return float(abs(float(np.sum(pred)) - total_obs) / total_obs)
-
-
-def _concordance_correlation_coefficient(observed: np.ndarray, predicted: np.ndarray) -> float:
-    """Compute Lin's concordance correlation coefficient.
-
-    :param observed: 1-D array of observed values.
-    :type observed: numpy.ndarray
-    :param predicted: 1-D array of predicted values (same shape).
-    :type predicted: numpy.ndarray
-    :returns: Concordance correlation coefficient in [-1, 1] (1 is perfect).
-    :rtype: float
-    :raises ValueError: If shapes mismatch or the denominator is zero.
-    """
-    obs = np.asarray(observed, dtype=float)
-    pred = np.asarray(predicted, dtype=float)
-    if obs.shape != pred.shape:
-        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
-    mean_obs = float(np.mean(obs))
-    mean_pred = float(np.mean(pred))
-    var_obs = float(np.var(obs))
-    var_pred = float(np.var(pred))
-    covariance = float(np.mean((obs - mean_obs) * (pred - mean_pred)))
-    denominator = var_obs + var_pred + (mean_obs - mean_pred) ** 2
-    if denominator == 0.0:
-        raise ValueError("Denominator is zero; CCC is undefined.")
-    return float(2.0 * covariance / denominator)
-
-
-def _index_of_agreement(observed: np.ndarray, predicted: np.ndarray) -> float:
-    """Compute Willmott's index of agreement.
-
-    :param observed: 1-D array of observed values.
-    :type observed: numpy.ndarray
-    :param predicted: 1-D array of predicted values (same shape).
-    :type predicted: numpy.ndarray
-    :returns: Index of agreement in [0, 1] (1 is perfect).
-    :rtype: float
-    :raises ValueError: If shapes mismatch or the potential error is zero.
-    """
-    obs = np.asarray(observed, dtype=float)
-    pred = np.asarray(predicted, dtype=float)
-    if obs.shape != pred.shape:
-        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
-    mean_obs = float(np.mean(obs))
-    ss_res = float(np.sum((obs - pred) ** 2))
-    ss_pot = float(np.sum((np.abs(pred - mean_obs) + np.abs(obs - mean_obs)) ** 2))
-    if ss_pot == 0.0:
-        raise ValueError("Potential error (SS_pot) is zero; Index of Agreement is undefined.")
-    return float(1.0 - ss_res / ss_pot)
-
-
 class Con15(IObjective):
     """Absolute error of a zero-intercept event-peak regression slope.
 
@@ -880,7 +681,7 @@ class Con15(IObjective):
         *, allow_overlapping_events: bool = False,
     ) -> None:
         super().__init__(mask=mask)
-        _top_peak_indices(np.empty(0), top_fraction)
+        top_peak_indices(np.empty(0), top_fraction)
         windows = np.asarray(event_windows)
         if (windows.ndim != 2 or windows.shape[1] != 2 or not len(windows)
                 or windows.dtype.kind not in "iu"):
@@ -932,7 +733,7 @@ class Con15(IObjective):
         if not all(np.isfinite(event).all() for event in obs_events):
             raise ValueError("Non-finite samples in Con15 observed events; all samples must be finite")
         obs_peaks = self._event_values(obs, eligible)
-        return eligible[_top_peak_indices(obs_peaks, self.top_fraction)]
+        return eligible[top_peak_indices(obs_peaks, self.top_fraction)]
 
     def slope(
         self,
@@ -952,7 +753,7 @@ class Con15(IObjective):
         if not all(np.isfinite(event).all() for event in pred_events):
             raise ValueError("Con15 selected modeled events must contain only finite samples")
         pred_peaks = self._event_values(pred, selected)
-        value = _peak_regression_slope(obs_peaks, pred_peaks)
+        value = peak_regression_slope(obs_peaks, pred_peaks)
         if not np.isfinite(value):
             raise ValueError("Con15 requires finite selected peaks and positive observed peak energy")
         return value
@@ -995,31 +796,9 @@ class Con15(IObjective):
         return self.compute(full_observed, full_predicted)
 
 
-
-def _top_peak_indices(observed_peaks: np.ndarray, top_fraction: float) -> np.ndarray:
-    """Stable observed-only ranking shared by calibration and acceptance."""
-    if not np.isfinite(top_fraction) or not 0 < top_fraction <= 1:
-        raise ValueError("top_fraction must be finite and in (0, 1]")
-    count = max(1, int(np.ceil(len(observed_peaks) * top_fraction)))
-    return np.argsort(-observed_peaks, kind="stable")[:count]
-
-
-def _peak_regression_slope(observed_peaks: np.ndarray, modeled_peaks: np.ndarray) -> float:
-    """Return a zero-intercept slope, or NaN for an undefined report metric."""
-    x, y = np.asarray(observed_peaks, float), np.asarray(modeled_peaks, float)
-    if x.ndim != 1 or x.shape != y.shape:
-        raise ValueError("Peak arrays must be aligned and one-dimensional")
-    if not len(x) or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
-        return float("nan")
-    denominator = float(x @ x)
-    return float(x @ y / denominator) if denominator > 0 else float("nan")
-
-
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
-
-from ..registry import NamedRegistry  # noqa: E402
 
 #: Objectives by name (their ``name`` class variable), for configuration.
 #: Register your own with ``objective_registry.add(MyObjective.name, MyObjective)``.

@@ -34,7 +34,7 @@ from sparsehydro.calibration import (
     NashSutcliffe,
     PeakWeightedMSE,
 )
-from sparsehydro.calibration.objectives import (
+from sparsehydro.metrics.objectives import (
     PBIAS,
     IndexOfAgreement,
     LogNSE,

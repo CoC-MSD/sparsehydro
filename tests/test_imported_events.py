@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.objectives import Con15
+from sparsehydro.metrics.objectives import Con15
 from sparsehydro.calibration.wholeflow_workflow import storm_scoring_mask
 from sparsehydro.events.imported import imported_event_inventory, load_event_windows
 

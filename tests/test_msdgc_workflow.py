@@ -5,8 +5,9 @@ import pandas as pd
 import pytest
 
 from sparsehydro.calibration.msdgc_assessment import CFS_H_TO_MG, MSDGCAssessment, MSDGCCon15, MSDGCSettings, _zone_window, assessment_event_inventory
-from sparsehydro.calibration.objectives import Con15
-from sparsehydro.calibration.wholeflow_acceptance import AcceptanceContract, lin_ccc
+from sparsehydro.metrics.objectives import Con15
+from sparsehydro.calibration.wholeflow_acceptance import AcceptanceContract
+from sparsehydro.metrics.functions import concordance_correlation
 
 
 @pytest.mark.parametrize("duration,minutes,counts", [
@@ -78,7 +79,7 @@ def test_volumes_are_rounded_in_mg_before_ccc_and_slope():
         pairs = report.query("zone == @zone")
         x, y = pairs.observed_volume_mg.to_numpy(), pairs.modeled_volume_mg.to_numpy()
         np.testing.assert_allclose(x, np.round(x, 4))
-        assert scores.loc[f"{zone}_ccc", "value"] == pytest.approx(lin_ccc(x, y))
+        assert scores.loc[f"{zone}_ccc", "value"] == pytest.approx(concordance_correlation(x, y, undefined="nan"))
     assert scores.loc["three_zone_mean_ccc", "value"] == pytest.approx(
         scores.loc[["conveyance_ccc", "storage_ccc", "treatment_ccc"], "value"].mean())
     definition = MSDGCCon15(events[["start_idx", "end_idx"]].to_numpy(),
