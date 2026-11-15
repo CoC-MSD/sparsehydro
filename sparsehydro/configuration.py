@@ -37,11 +37,11 @@ from pathlib import Path
 from typing import Any
 
 
-from sparsehydro.metrics.objectives import (
-    IObjective,
-)
+from sparsehydro.calibration.solvers import solver_registry
 from sparsehydro.calibration.solvers.base import ISolver
+from sparsehydro.metrics.objectives import IObjective, objective_registry
 from sparsehydro.parameters import ScalarParameter
+from sparsehydro.registry import registry
 
 
 @dataclass(frozen=True)
@@ -87,8 +87,6 @@ def build_component(spec: Any) -> Any:
 
     :raises KeyError: For an unknown ``type`` (the message lists known names).
     """
-    from sparsehydro.registry import registry
-
     if isinstance(spec, Mapping):
         if "type" in spec:
             cls = registry.get(spec["type"])
@@ -145,8 +143,6 @@ def build_objectives(specs: Sequence[Any], masks: Mapping[str, Any] | None = Non
 
     :raises KeyError: For an unknown objective or mask name.
     """
-    from sparsehydro.metrics.objectives import objective_registry
-
     masks = dict(masks or {})
     objectives = []
     for spec in specs:
@@ -165,8 +161,6 @@ def build_objectives(specs: Sequence[Any], masks: Mapping[str, Any] | None = Non
 
 def build_solver(spec: Any) -> ISolver:
     """Build a solver from a name or ``{"type": name, **constructor_kwargs}``."""
-    from sparsehydro.calibration.solvers import solver_registry
-
     if isinstance(spec, str):
         spec = {"type": spec}
     body = dict(spec)
