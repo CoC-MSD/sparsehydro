@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sparsehydro"
-version = "1.0.0a1"
+dynamic = ["version"]  # single source: __version__ in sparsehydro/__init__.py
 description = "Interface specifications for parsimonious hydrological models"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -25,7 +25,7 @@ maintainers = [
 
 keywords = ["hydrology", "parsimonious", "model", "calibration", "pytorch"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -91,6 +91,9 @@ Repository = "https://github.com/CoC-MSD/sparsehydro"
 Documentation = "https://coc-msd.github.io/SparseHydro/"
 Issues = "https://github.com/CoC-MSD/sparsehydro/issues"
 Changelog = "https://github.com/CoC-MSD/sparsehydro/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "sparsehydro/__init__.py"
 
 [tool.hatch.build]
 exclude = [

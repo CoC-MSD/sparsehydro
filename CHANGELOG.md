@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ## [Unreleased]
 
+## [1.0.0b1] - 2026-11-15
+
+First beta of 1.0.0: the public API (models and the registry, composition and
+configuration, metrics and objectives, calibration and solvers) is complete
+and expected to change only for problems found during the beta. This release
+also contains the changes noted as 1.0.0a2, which was never tagged.
+
 ### Added
 
 - Unit hydrograph library on one convention (time in hours, kernels that are
@@ -76,8 +83,23 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 - `tests/test_layering.py` enforces the package layers (see `CONTRIBUTING.md`):
   no upward imports, nothing imports `sparsehydro.studies`, and package
   `__init__` files only re-export.
+- Parsimonious event detection with hierarchical global and sub-event records,
+  variable Savitzky-Golay smoothing, peak detection, and event-zone analysis.
+- Sequential and global sequential unit-hydrograph fitting with zonal
+  weighting.
+- Unit-hydrograph, event hierarchy, convolution, Pareto knee,
+  parameter-bounds, and model-component visualizations.
+- Abstraction and composite model support for integrated rainfall-runoff
+  workflows.
 
 ### Changed
+
+- The version is defined once, in `sparsehydro/__init__.py` (`pyproject.toml`
+  reads it), and the package is classified as beta.
+- Expanded calibration objectives and solver support for weighted and
+  multi-objective workflows.
+- Improved time-series parsing and plotting performance for large monitoring
+  datasets.
 
 - **BREAKING:** modules regrouped so each package has one job and imports
   only from the layers below it. Names exported from a package's
@@ -184,19 +206,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 - Ten test modules deleted in the whole-flow pull request are restored, and no
   test depends on a notebook.
 
-## [1.0.0a2] - 2026-09-02
+## [0.1.0a1]
 
-### Added
+First tagged pre-release.
 
-- Parsimonious event detection with hierarchical global and sub-event records, variable Savitzky-Golay smoothing, peak detection, and event-zone analysis.
-- Sequential and global sequential unit-hydrograph fitting with zonal weighting.
-- Unit-hydrograph, event hierarchy, convolution, Pareto knee, parameter-bounds, and model-component visualizations.
-- Abstraction and composite model support for integrated rainfall-runoff workflows.
-
-### Changed
-
-- Expanded calibration objectives and solver support for weighted and multi-objective workflows.
-- Improved time-series parsing and plotting performance for large monitoring datasets.
-
-[Unreleased]: https://github.com/CoC-MSD/sparsehydro/compare/v1.0.0a2...HEAD
-[1.0.0a2]: https://github.com/CoC-MSD/sparsehydro/releases/tag/v1.0.0a2
+[Unreleased]: https://github.com/CoC-MSD/sparsehydro/compare/v1.0.0b1...HEAD
+[1.0.0b1]: https://github.com/CoC-MSD/sparsehydro/compare/v0.1.0a1...v1.0.0b1
+[0.1.0a1]: https://github.com/CoC-MSD/sparsehydro/releases/tag/v0.1.0a1
