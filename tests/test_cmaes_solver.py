@@ -1,8 +1,6 @@
 """Regression coverage for the scalar Platypus CMA-ES solver."""
 
 import copy
-import json
-from pathlib import Path
 import random
 
 import numpy as np
@@ -136,63 +134,3 @@ def test_worker_failure_is_not_hidden():
         solver().solve(Broken())
 
 
-def test_current_notebook_runs_cmaes_from_its_settings_page(tmp_path):
-    from tests import test_configuration as notebook_support
-    from tests.test_configuration import PATTERN, build, forcing, notebook_namespace
-    from sparsehydro.calibration.msdgc_assessment import MSDGCSettings
-    from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe, PBIAS
-    from sparsehydro.configuration import GROUNDWATER_PARAMETERS, ModelSettings, StudySettings
-    from sparsehydro.models.rdii.initial_abstraction import snow_partition
-
-    path = (Path(__file__).resolve().parents[1] / "sparsehydro" / "notebooks"
-            / "flowfinity_gwi_wholeflow_pattern_joint.ipynb")
-    notebook = json.loads(path.read_text(encoding="utf-8"))
-    sources = {c["id"]: "".join(c["source"]) for c in notebook["cells"]}
-    ns = notebook_namespace(notebook)
-    template = build(StudySettings(model=ModelSettings(n_triangles=4, seasonal_baseline="off")))
-    overrides = {
-        name: {"calibrate": name in ("sanitary_mean_cfs", "R_4")}
-        for name in template.scalar_parameter_names if name not in GROUNDWATER_PARAMETERS
-    }
-    data = forcing()
-    ns.update(
-        GROUNDWATER_ENABLED=False, SEASONAL_BASELINE="off", N_RTK_TRIANGLES=4,
-        SNOW_ENABLED=False, CALIBRATE_SNOW=False, PARAMETER_OVERRIDES=overrides,
-        SOLVER="cmaes", SCORING_MODE="single", SINGLE_OBJECTIVE="nash_sutcliffe",
-        CMA_ES_SETTINGS=dict(cma_n_trials=21, cma_multi_start=2, cma_n_jobs=1,
-                             cma_seed=42, cma_offspring_size=4, cma_progress_every=0),
-        EVENT_SOURCE="auto", odwf_cfs=.8, _dt_hours=1., model_df=data,
-        sanitary_pattern=PATTERN, ARTIFACT_DIR=tmp_path,
-        ConcordanceCorrelationCoefficient=ConcordanceCorrelationCoefficient,
-        NashSutcliffe=NashSutcliffe, PBIAS=PBIAS,
-        msdgc_settings=MSDGCSettings(minimum_minutes=(60., 20., 30.),
-                                   maximum_minutes=(60., 240., 1440.)),
-    )
-    if hasattr(notebook_support, "build_model_state"):
-        notebook_support.build_model_state(ns)
-    else:
-        for cell in ("pattern-joint-22", "pattern-joint-30", "pattern-joint-47"):
-            exec(sources[cell], ns)
-    data["flow_cfs"] = ns["joint_model"].predict_total_cfs() * 1.03
-    data["stormflow"] = data.flow_cfs - .6
-    for column, values in snow_partition(
-            data.rainfall_in.to_numpy(), data.temperature_c.to_numpy(), 1., None).items():
-        data[column] = values
-    train = np.arange(len(data)) < 120
-    import pandas as pd
-
-    ns.update(
-        train_mask=train, val_mask=~train, storm_mask=train.copy(),
-        acceptance_events=pd.DataFrame({
-            "event_id": ["train", "validation"], "start_idx": [48, 144],
-            "end_idx": [72, 167], "duration_hours": [24., 23.], "split": ["train", "validation"],
-        }),
-    )
-    if hasattr(notebook_support, "calibrate_state"):
-        notebook_support.calibrate_state(ns)
-    else:
-        exec(sources["pattern-joint-49"], ns)
-    assert isinstance(ns["solver2"], PlatypusCmaEsSolver)
-    assert ns["joint_result"].pareto_X.shape == (1, 2)
-    assert len(ns["joint_result"].history) == 42
-    assert ns["calibration_config"].solver_metadata()["solver"] == "platypus.CMAES"

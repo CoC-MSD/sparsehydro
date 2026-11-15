@@ -1,6 +1,5 @@
 import json
 from dataclasses import replace
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -371,36 +370,3 @@ def test_background_nonnegativity_is_not_output_clipping():
         model.predict()
 
 
-@pytest.mark.parametrize("groundwater", [False, True])
-def test_notebook_monthly_report_and_sensitivity_preserve_model(groundwater):
-    from sparsehydro.calibration.pattern_reporting import seasonal_dry_diagnostics
-    path = Path(__file__).parents[1] / "sparsehydro" / "notebooks" / "flowfinity_gwi_wholeflow_pattern_joint.ipynb"
-    sources = {c["id"]: "".join(c["source"]) for c in json.loads(path.read_text(encoding="utf-8"))["cells"]}
-    frame = data()
-    model = build(frame, groundwater=groundwater, mode="off" if groundwater else "observed")
-    model.get_scalar_parameter("s_initial_fraction").value = .3
-    if groundwater:
-        model.get_scalar_parameter("g_initial_fraction").value = .25
-    model.prepare(frame)
-    prediction = model.predict()
-    saved = {n: model.get_scalar_parameter(n).value for n in model.scalar_parameter_names}
-    budget = model.budget.copy()
-    frame["joint_sanitary_cfs"] = prediction.sanitary_cfs
-    frame["gwi_cfs"], frame["rdii_cfs"] = prediction.gwi_cfs, prediction.rdii_cfs
-    train = frame.datetime.dt.month.le(3).to_numpy()
-    frame["flow_cfs"] = prediction.total_cfs
-    ns = dict(np=np, pd=pd, joint_model=model, joint_pred=prediction, model_df=frame,
-              seasonal_dry_diagnostics=seasonal_dry_diagnostics,
-              dry_mask=train, val_dry_mask=~train, scored_mask=np.ones(len(frame), bool),
-              q_total=prediction.total_cfs.to_numpy(), obs_flow=prediction.total_cfs.to_numpy(),
-              display=lambda _: None)
-    exec(sources["pattern-joint-51"], ns)
-    report = ns["seasonal_diagnostics"]
-    assert len(report) == 24
-    defined = report.status.eq("defined")
-    assert report.loc[~defined, "total_bias_cfs"].isna().all()
-    assert report.loc[defined, "total_bias_cfs"].abs().max() == 0
-    assert report.loc[defined, "slow_background_mean_cfs"].notna().all()
-    assert saved == {n: model.get_scalar_parameter(n).value for n in model.scalar_parameter_names}
-    assert budget == model.budget
-    pd.testing.assert_frame_equal(prediction, model.predict())

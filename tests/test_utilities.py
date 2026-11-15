@@ -8,9 +8,11 @@ import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import numpy as np
 import pandas as pd
+import pytest
 
-from sparsehydro.data.utilities import add_time_features, read_tsf
+from sparsehydro.data.utilities import add_time_features, read_tsf, write_tsf
 
 
 _STORM_TSF = (
@@ -290,3 +292,44 @@ class TestAddTimeFeatures(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# write_tsf validation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", ["empty", "nan", "inf", "duplicate", "unsorted", "timezone", "subsecond", "nat"])
+def test_tsf_writer_rejects_invalid_series(tmp_path, bad):
+    index = pd.date_range("2025-01-01", periods=3, freq="5min")
+    values = np.array([1., 2., 3.])
+    if bad == "empty":
+        index, values = index[:0], values[:0]
+    elif bad in ("nan", "inf"):
+        values[1] = float(bad)
+    elif bad == "duplicate":
+        index = pd.DatetimeIndex([index[0], index[0], index[2]])
+    elif bad == "unsorted":
+        index = index[::-1]
+    elif bad == "timezone":
+        index = index.tz_localize("UTC")
+    elif bad == "subsecond":
+        index += pd.Timedelta(milliseconds=1)
+    else:
+        index = pd.DatetimeIndex([index[0], pd.NaT, index[2]])
+    path = tmp_path / "invalid.tsf"
+    with pytest.raises(ValueError):
+        write_tsf(pd.Series(values, index=index), path, title="Flow", variable="Flow", unit="MGD")
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("title", ""), ("title", "bad\nheader"), ("variable", "bad\theader"),
+    ("variable", "Date/Time"), ("unit", "bad\rheader"),
+])
+def test_tsf_writer_rejects_invalid_headers(tmp_path, field, value):
+    header = dict(title="Flow", variable="Flow", unit="MGD")
+    header[field] = value
+    path = tmp_path / "invalid.tsf"
+    with pytest.raises(ValueError):
+        write_tsf(pd.Series([1.], index=pd.date_range("2025-01-01", periods=1)), path, **header)
+    assert not path.exists()

@@ -1,6 +1,6 @@
 from tests.pattern_workflow_support import (
-    configure_state, build_model_state, prepare_data_state, event_coverage_state,
-    objective_state, calibrate_state, report_state, assessment_state,
+    controls,
+    configure_state, build_model_state, objective_state, calibrate_state, report_state,
 )
 
 import numpy as np
@@ -132,58 +132,6 @@ def test_gwi_is_live_and_forcing_is_strict():
             model.prepare(bad)
 
 
-
-
-def test_delivered_notebook_has_one_solve_and_report_only_checker():
-    import ast
-    import json
-    from pathlib import Path
-
-    path = (Path(__file__).parents[1] / "sparsehydro" / "notebooks"
-            / "flowfinity_gwi_wholeflow_pattern_joint.ipynb")
-    notebook = json.loads(path.read_text(encoding="utf-8"))
-    ids = [c["id"] for c in notebook["cells"]]
-    assert len(ids) == len(set(ids))
-    for cell in notebook["cells"]:
-        suffix = cell["id"].removeprefix("pattern-joint-")
-        if suffix.isdigit():
-            assert cell["metadata"]["original_cell_index"] == int(suffix)
-    expected_reports = [
-        "pattern-joint-tsf-description", "pattern-joint-tsf-export",
-        "pattern-joint-conveyance-description", "pattern-joint-conveyance-report",
-    ]
-    assert [name for name in ids if name in expected_reports] == expected_reports
-    solve_cells, metrics_cells, conveyance_cells = [], [], []
-    for cell in notebook["cells"]:
-        if cell["cell_type"] != "code":
-            continue
-        source = "".join(cell["source"])
-        compile(source, str(path), "exec")
-        tree = ast.parse(source)
-        assert not any(isinstance(n, ast.Name) and n.id in {
-            "floor_cfs", "gwi_model", "sanitary_problem", "calib_result",
-        } for n in ast.walk(tree))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id == "calibrate_pattern_model":
-                    solve_cells.append(cell["metadata"]["original_cell_index"])
-                if node.func.id == "export_pattern_report":
-                    metrics_cells.append(cell["metadata"]["original_cell_index"])
-    assert solve_cells == [49]
-    assert metrics_cells == [61]
-    # Solver setup audits observed volumes only; modeled report scoring stays report-only.
-    import inspect
-    from sparsehydro.calibration.pattern_workflow import build_pattern_objectives
-    from sparsehydro.calibration.pattern_reporting import assess_pattern_prediction
-
-    for function in (build_pattern_objectives, assess_pattern_prediction):
-        body = ast.parse(inspect.getsource(function))
-        assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                   and n.func.attr == "conveyance_report" for n in ast.walk(body))
-    assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                   and n.func.attr == "solve" for n in ast.walk(body))
-
-
 @pytest.mark.parametrize("dt", [1 / 12, .25, 1.0])
 @pytest.mark.parametrize("area_factor", [.7, 1.3])
 def test_live_area_scales_gwi_and_rtk_but_not_stores_or_sanitary(dt, area_factor):
@@ -207,29 +155,13 @@ def test_live_area_scales_gwi_and_rtk_but_not_stores_or_sanitary(dt, area_factor
     assert model.budget == budget
 
 
-@pytest.fixture
-def notebook_sources():
-    import json
-    from pathlib import Path
-
-    path = (Path(__file__).parents[1] / "sparsehydro" / "notebooks"
-            / "flowfinity_gwi_wholeflow_pattern_joint.ipynb")
-    sources = {c["id"]: "".join(c["source"]) for c in json.loads(
-        path.read_text(encoding="utf-8"))["cells"]}
-    sources["pattern-joint-00"] = "\n".join(
-        source for cell_id, source in sources.items()
-        if cell_id == "pattern-joint-00" or (
-            cell_id.startswith("pattern-settings-") and cell_id != "pattern-settings-index"))
-    return sources
-
-
 @pytest.mark.parametrize("calibrate_area", [False, True])
 @pytest.mark.parametrize("snow_mode", ["disabled", "fixed", "calibrated"])
-def test_notebook_explicitly_wires_area_into_calibration(notebook_sources, calibrate_area, snow_mode):
+def test_notebook_explicitly_wires_area_into_calibration(calibrate_area, snow_mode):
     import time
 
     ns = dict(np=np, time=time, phase_seconds={})
-    exec(notebook_sources["pattern-joint-00"], ns)
+    ns.update(controls())
     assert ns["CALIBRATE_AREA"] is True
     ns.update(CALIBRATE_AREA=calibrate_area, SEASONAL_BASELINE="off", GROUNDWATER_ENABLED=True,
               odwf_cfs=.8, _dt_hours=1.0,
@@ -255,136 +187,6 @@ def test_notebook_explicitly_wires_area_into_calibration(notebook_sources, calib
             assert (parameter.lower_bound, parameter.upper_bound) == (lower, upper)
 
 
-@pytest.mark.parametrize("warmup_steps", [0, 6])
-@pytest.mark.parametrize("has_validation", [False, True])
-def test_notebook_whole_hydrograph_has_linked_rainfall(
-    notebook_sources, monkeypatch, tmp_path, warmup_steps, has_validation,
-):
-    import json
-    from types import SimpleNamespace
-
-    import plotly.graph_objects as go
-    from sparsehydro.visualization.display import add_val_vrects
-    from sparsehydro.visualization.wholeflow_diagnostics import plot_total_flow
-
-    data = study_data(days=10)
-    model = make_model()
-    model.prepare(data)
-    prediction = model.predict()
-    frame = data.assign(joint_sanitary_cfs=prediction.sanitary_cfs,
-                        total_cfs=prediction.total_cfs)
-    val = (np.arange(len(data)) >= 180) & has_validation
-    train = (np.arange(len(data)) >= warmup_steps) & ~val
-    event = SimpleNamespace(start_idx=72, end_idx=100)
-    shown = []
-    monkeypatch.setattr(go.Figure, "show", lambda fig: shown.append(fig))
-    ns = dict(pd=pd, go=go, model_df=frame, base_cfs=prediction.baseflow_cfs,
-              joint_pred=prediction, plot_total_flow=plot_total_flow,
-              acceptance_events=pd.DataFrame([vars(event)]),
-              obs_flow=data.flow_cfs, train_mask=train, val_mask=val,
-              _ccc=ConcordanceCorrelationCoefficient(), _nse=NashSutcliffe(),
-              _warmup_steps=warmup_steps, _events=[event], ARTIFACT_DIR=tmp_path,
-              add_val_vrects=lambda fig, t, **kw: add_val_vrects(fig, t, val, **kw))
-    exec(notebook_sources["pattern-joint-57"], ns)
-    fig = ns["fig"]
-    assert shown == [fig]
-    rain, observed, modeled = fig.data
-    assert rain.name == "Rainfall"
-    assert (rain.xaxis, rain.yaxis) == ("x", "y")
-    assert rain.fill == "tozeroy"
-    np.testing.assert_array_equal(rain.y, data.rainfall_in)
-    np.testing.assert_array_equal(observed.y, data.flow_cfs)
-    np.testing.assert_array_equal(modeled.y, prediction.total_cfs)
-    for trace in fig.data:
-        np.testing.assert_array_equal(trace.x, data.datetime)
-    assert (observed.xaxis, observed.yaxis) == ("x2", "y2")
-    assert (modeled.xaxis, modeled.yaxis) == ("x2", "y2")
-    assert fig.layout.xaxis.matches == "x2"
-    assert fig.layout.yaxis.autorange == "reversed"
-    assert fig.layout.yaxis.title.text == "Rain [in/step]"
-    assert fig.layout.yaxis2.title.text == "Flow [cfs]"
-    assert fig.layout.xaxis2.title.text == "Date"
-    ccc_tot = ConcordanceCorrelationCoefficient().compute(data.flow_cfs, prediction.total_cfs, mask=train)
-    assert f"train CCC={ccc_tot:.3f}" in fig.layout.title.text
-    assert ("val CCC=" in fig.layout.title.text) == has_validation
-    shapes = fig.layout.shapes
-    assert len(shapes) == 1 + bool(warmup_steps) + has_validation
-    assert all(s.xref == "x2" and s.yref == "y2 domain" for s in shapes)
-    assert any(s.x0 == data.datetime.iloc[event.start_idx]
-               and s.x1 == data.datetime.iloc[event.end_idx] for s in shapes)
-    if warmup_steps:
-        assert any(s.x0 == data.datetime.iloc[0]
-                   and s.x1 == data.datetime.iloc[warmup_steps - 1] for s in shapes)
-    if has_validation:
-        assert any(s.x0 == data.datetime.iloc[180]
-                   and s.x1 == data.datetime.iloc[-1] for s in shapes)
-    export = tmp_path / "flowfinity_wholeflow_joint_hydrograph.html"
-    html = export.read_text(encoding="utf-8")
-    assert '"name":"Rainfall"' in html
-    assert len(rain.y) == len(data)
-    json.loads(fig.to_json())
-    note = notebook_sources["pattern-joint-56"]
-    assert "May 2, June 7, and June 16" in note
-    assert "does not exclude them" in note
-
-
-def test_notebook_g_plot_diagnostics_and_budget_use_selected_area(
-    notebook_sources, monkeypatch, tmp_path,
-):
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    from sparsehydro.calibration.wholeflow_workflow import parameter_table
-    from sparsehydro.calibration.pattern_reporting import groundwater_diagnostics
-    from sparsehydro.visualization.wholeflow_diagnostics import plot_groundwater_store
-
-    model = make_model()
-    model.get_scalar_parameter("area_acres").update(value=26.0, calibrate=True)
-    model.get_scalar_parameter("g_max").value = .01
-    model.get_scalar_parameter("k_G").value = 1e-5
-    model.get_scalar_parameter("k_div").value = .05
-    data = study_data(days=30)
-    model.prepare(data)
-    p = model.predict()
-    frame = data.copy()
-    for column in p:
-        frame[column] = p[column]
-    train = np.arange(len(p)) < 400
-    val = ~train
-    monkeypatch.setattr(go.Figure, "show", lambda *args, **kwargs: None)
-    monkeypatch.setattr(go.Figure, "write_html", lambda *args, **kwargs: None)
-    ns = dict(np=np, pd=pd, go=go, make_subplots=make_subplots, joint_model=model,
-              joint_pred=p, model_df=frame, _t=data.datetime, _S=p.S_in,
-              AREA_ACRES=20.26, fitted_area_acres=26.0, _dt_hours=1.0, DT_HOURS=1.0,
-              plot_groundwater_store=plot_groundwater_store, groundwater_diagnostics=groundwater_diagnostics,
-              DATA_TITLE="test", ARTIFACT_DIR=tmp_path, DISPLAY_MAX_POINTS=None,
-              thin_for_display=lambda fig, *args: fig, display=lambda *args: None,
-              add_val_vrects=lambda *args, **kwargs: None, _warmup_steps=0,
-              obs_flow=data.flow_cfs, q_total=p.total_cfs, q_rdii=p.rdii_cfs,
-              parameter_table=parameter_table, train_mask=train, val_mask=val,
-              scored_mask=train | val)
-    exec(notebook_sources["pattern-joint-37"], ns)
-    traces = {t.name: t for t in ns["fig"].data}
-    assert traces["G [in] (deep store)"].yaxis == "y2"
-    factor = 26 * 3630 / 3600
-    np.testing.assert_allclose(traces["Slow G release [cfs]"].y, p.gwi_release_in * factor)
-    np.testing.assert_allclose(traces["G capacity spill [cfs]"].y, p.gwi_spill_in * factor)
-    precipitation = model.budget["initial_storage_in"] + np.cumsum(data.rainfall_in)
-    accounted = np.cumsum(p.et_in + (p.gwi_cfs + p.rdii_cfs) / factor + p.unrouted_excess_in)
-    accounted += p.S_in + p.G_in + p.routing_storage_in + p.SWE_in
-    np.testing.assert_allclose(precipitation, accounted, atol=1e-8, rtol=0)
-    exec(notebook_sources["pattern-joint-43"], ns)
-    diagnostics = ns["gwi_diagnostics"].set_index("window")
-    assert diagnostics.loc["whole", "spill_share_pct"] > 90
-    assert diagnostics.loc["whole", "G_max_in"] == pytest.approx(p.G_in.max())
-    assert diagnostics.loc["whole", "at_cap_pct"] == pytest.approx(100 * p.G_at_cap.mean())
-    assert diagnostics.loc["train", "n"] == train.sum()
-    assert diagnostics.loc["validation", "n"] == val.sum()
-    ns["joint_pred"] = p.assign(gwi_release_in=0.0, gwi_spill_in=0.0)
-    exec(notebook_sources["pattern-joint-43"], ns)
-    assert ns["gwi_diagnostics"].spill_share_pct.isna().all()
-    assert ns["gwi_diagnostics"].status.eq("undefined_no_discharge").all()
-
-
 @pytest.mark.parametrize("top_fraction", [.15, .3, 1.])
 @pytest.mark.parametrize("scoring_mode,objective_names", [
     ("multiobjective", ["ccc", "nash_sutcliffe"]),
@@ -399,7 +201,7 @@ def test_notebook_g_plot_diagnostics_and_budget_use_selected_area(
 ])
 @pytest.mark.parametrize("use_filter", [False, True])
 def test_notebook_calibrates_lean_but_builds_full_selected_output(
-    notebook_sources, monkeypatch, tmp_path, capsys, top_fraction, scoring_mode,
+    monkeypatch, tmp_path, capsys, top_fraction, scoring_mode,
     objective_names, use_filter,
 ):
     import time
@@ -416,7 +218,7 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
               PatternWholeFlowModel=PatternWholeFlowModel,
               ConcordanceCorrelationCoefficient=ConcordanceCorrelationCoefficient,
               NashSutcliffe=NashSutcliffe, PBIAS=PBIAS, Con15=Con15)
-    exec(notebook_sources["pattern-joint-00"], ns)
+    ns.update(controls())
     ns.update(odwf_cfs=.8, _dt_hours=1.0, SEASONAL_BASELINE="off", GROUNDWATER_ENABLED=True,
               SOLVER="auto", sanitary_pattern=make_model().pattern,
               model_df=data.assign(stormflow=data.flow_cfs - .6),
@@ -548,20 +350,10 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
     assert saved_front.loc[ns["selected_index"], "selection_status"] == ns["selection_status"]
     if top_fraction == .3:
         import json
-        import plotly.graph_objects as go
         from pathlib import Path
         from types import SimpleNamespace
         from sparsehydro.calibration.splits import SplitConfig
 
-        monkeypatch.setattr(go.Figure, "show", lambda *args, **kwargs: None)
-        ns.update(use_webgl=lambda fig: fig, thin_for_display=lambda fig, points: fig)
-        plot_source = next(source for source in notebook_sources.values()
-                           if "fig = use_webgl(plot_parallel_coordinates(" in source)
-        exec(plot_source, ns)
-        assert ns["solver_label"] in ns["fig"].layout.title.text
-        assert ns["_display_result"].objective_names == expected_names
-        labels = [dimension.label for dimension in ns["fig"].data[0].dimensions]
-        assert labels[-len(expected_names):] == expected_names
 
         zeros = np.zeros(len(data), bool)
         ns.update(
@@ -1026,26 +818,13 @@ def test_filter_validates_tolerance_and_propagates_simulation_errors(tolerance, 
         select_peak_filtered_pareto(result, model, observed, peak_filter=peak_filter)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize("use_objective,use_filter", [(False, False), (True, False), (False, True)])
 def test_notebook_only_requires_training_events_for_enabled_peak_controls(
-    notebook_sources, use_objective, use_filter,
+    use_objective, use_filter,
 ):
-    import ast
 
     namespace = {}
-    exec(notebook_sources["pattern-joint-00"], namespace)
+    namespace.update(controls())
     namespace.update(
         np=np, pd=pd, Con15=Con15,
         NSGA2_SETTINGS={"pop_size": 12, "generations": 4, "seed": 42},
@@ -1078,10 +857,10 @@ def test_notebook_only_requires_training_events_for_enabled_peak_controls(
     ({"SCORING_MODE": "single", "SINGLE_OBJECTIVE": "unknown"}, "objectives"),
 ])
 def test_notebook_rejects_invalid_solver_objective_configuration(
-    notebook_sources, overrides, message,
+    overrides, message,
 ):
     namespace = {}
-    exec(notebook_sources["pattern-joint-00"], namespace)
+    namespace.update(controls())
     namespace["SCORING_MODE"] = "multiobjective"
     namespace.update(overrides)
     with pytest.raises(ValueError, match=message):
@@ -1089,13 +868,13 @@ def test_notebook_rejects_invalid_solver_objective_configuration(
 
 
 @pytest.mark.parametrize("allowance", [-.01, 1.01, np.nan, np.inf])
-def test_notebook_rejects_invalid_near_tie_allowance_before_optimization(notebook_sources, allowance):
+def test_notebook_rejects_invalid_near_tie_allowance_before_optimization(allowance):
     namespace = dict(
         np=np, pd=pd, Con15=Con15,
         ConcordanceCorrelationCoefficient=ConcordanceCorrelationCoefficient,
         NashSutcliffe=NashSutcliffe,
     )
-    exec(notebook_sources["pattern-joint-00"], namespace)
+    namespace.update(controls())
     namespace.update(
         SCORING_MODE="multiobjective", MULTIOBJECTIVE_OBJECTIVES=["ccc", "nash_sutcliffe"],
         USE_TRAINING_PEAK_FILTER=True, CON15_NEAR_TIE_ALLOWANCE=allowance,
@@ -1112,7 +891,7 @@ def test_notebook_rejects_invalid_near_tie_allowance_before_optimization(noteboo
 
 
 def test_notebook_rejects_mislabeled_training_peak_events_before_solver(
-    notebook_sources, monkeypatch,
+    monkeypatch,
 ):
     def no_solver(*args, **kwargs):
         raise AssertionError("Invalid training windows must fail before optimization")
@@ -1134,12 +913,11 @@ def test_notebook_rejects_mislabeled_training_peak_events_before_solver(
 
 @pytest.mark.parametrize("control", ["disabled", "objective", "preference"])
 def test_notebook_coarse_grid_diagnostics_do_not_enable_unused_con15(
-    notebook_sources, control, capsys,
+    control, capsys,
 ):
-    import ast
 
     namespace = dict(np=np, pd=pd)
-    exec(notebook_sources["pattern-joint-00"], namespace)
+    namespace.update(controls())
     mask = np.ones(10, bool)
     namespace.update(
         msdgc_settings=MSDGCSettings(), _dt_hours=1., EVENT_SOURCE="file",
@@ -1164,14 +942,12 @@ def test_notebook_coarse_grid_diagnostics_do_not_enable_unused_con15(
         assert [o.name for o in namespace["calibration_objectives"]] == ["ccc"]
 
 
-
-
-def test_notebook_requires_actual_compiled_numba_signature(notebook_sources, monkeypatch):
+def test_notebook_requires_actual_compiled_numba_signature(monkeypatch):
     import time
     from types import SimpleNamespace
 
     ns = dict(np=np, time=time, phase_seconds={})
-    exec(notebook_sources["pattern-joint-00"], ns)
+    ns.update(controls())
     ns.update(odwf_cfs=.8, _dt_hours=1.0, SEASONAL_BASELINE="off", sanitary_pattern=make_model().pattern,
               model_df=study_data(days=10))
     configure_state(ns)

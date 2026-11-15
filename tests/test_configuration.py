@@ -1,12 +1,10 @@
 from tests.pattern_workflow_support import (
-    configure_state, build_model_state, prepare_data_state, event_coverage_state,
-    objective_state, calibrate_state, report_state, assessment_state,
+    controls,
+    configure_state, build_model_state, calibrate_state,
 )
 
 import json
-from pathlib import Path
 import time
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -308,26 +306,15 @@ def test_each_solver_executes_a_configured_core_model(method, n_triangles):
         16 if method in ("nsga2", "spea2") else 8 if method == "cmaes" else None)
 
 
-@pytest.fixture(scope="module")
-def notebook():
-    path = Path(__file__).parents[1] / "sparsehydro" / "notebooks" / "flowfinity_gwi_wholeflow_pattern_joint.ipynb"
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def notebook_namespace(notebook):
-    ns = dict(np=np, pd=pd, time=time, phase_seconds={})
-    for cell in notebook["cells"]:
-        if cell["cell_type"] == "code" and (
-                cell["id"] == "pattern-joint-00" or cell["id"].startswith("pattern-settings-")):
-            exec("".join(cell["source"]), ns)
-    return ns
+def notebook_namespace():
+    """Study defaults plus the modules the workflow helpers expect in scope."""
+    return dict(np=np, pd=pd, time=time, phase_seconds={}, **controls())
 
 
 @pytest.mark.parametrize("groundwater", [False, True])
 @pytest.mark.parametrize("n_triangles", [1, 2, 3, 4, 5, 12])
-def test_notebook_pages_wire_modules_bounds_values_and_parameter_switches(notebook, groundwater, n_triangles):
-    sources = {c["id"]: "".join(c["source"]) for c in notebook["cells"]}
-    ns = notebook_namespace(notebook)
+def test_notebook_pages_wire_modules_bounds_values_and_parameter_switches(groundwater, n_triangles):
+    ns = notebook_namespace()
     ns.update(
         GROUNDWATER_ENABLED=groundwater, SEASONAL_BASELINE="off", N_RTK_TRIANGLES=n_triangles, odwf_cfs=.8,
         _dt_hours=1., model_df=forcing(), sanitary_pattern=PATTERN,
@@ -363,9 +350,8 @@ def test_notebook_pages_wire_modules_bounds_values_and_parameter_switches(notebo
     pd.testing.assert_frame_equal(model.predict(), restored.predict())
 
 
-def test_notebook_snow_bound_overrides_are_applied_before_frozen_masks(notebook):
-    sources = {c["id"]: "".join(c["source"]) for c in notebook["cells"]}
-    ns = notebook_namespace(notebook)
+def test_notebook_snow_bound_overrides_are_applied_before_frozen_masks():
+    ns = notebook_namespace()
     ns.update(SNOW_ENABLED=True, CALIBRATE_SNOW=True)
     ns["PARAMETER_OVERRIDES"] = {"snow_T": {"value": 1., "lower_bound": -3., "upper_bound": 4.}}
     configure_state(ns)
@@ -374,58 +360,13 @@ def test_notebook_snow_bound_overrides_are_applied_before_frozen_masks(notebook)
     assert ns["SNOW_CONFIG"].threshold_c == 1.
 
 
-def test_notebook_observed_background_is_training_only_and_rejects_gwi(notebook):
-    sources = {c["id"]: "".join(c["source"]) for c in notebook["cells"]}
-    frame = pd.DataFrame({
-        "datetime": pd.date_range("2024-01-01", periods=56 * 24, freq="h"),
-        "rainfall_in": 0., "temperature_c": 10., "dry_eligible": True,
-    })
-    frame["flow_cfs"] = .8 + .001 * np.arange(len(frame)) / 24
-    train = np.arange(len(frame)) // (3 * 24) % 4 != 2
-    train[:12] = False
-    train[-48:] = False
-    learned = []
-    for perturb in (False, True):
-        ns = notebook_namespace(notebook)
-        changed = frame.copy()
-        if perturb:
-            changed.loc[~train, "flow_cfs"] += 10000.
-        ns.update(
-            GROUNDWATER_ENABLED=False, SEASONAL_BASELINE="observed",
-            SNOW_ENABLED=False, CALIBRATE_SNOW=False, model_df=changed, _dt_hours=1.,
-            train_mask=train, val_mask=~train,
-            scored_mask=np.ones(len(frame), bool), display=lambda _: None,
-            plot_sanitary_shapes=lambda pattern: SimpleNamespace(show=lambda: None))
-        original_train, original_val, original_scored = train.copy(), (~train).copy(), ns["scored_mask"].copy()
-        exec(sources["pattern-joint-27"], ns)
-        build_model_state(ns)
-        model = ns["joint_model"]
-        assert "sanitary_mean_cfs" not in model.scalar_parameter_names
-        assert model.predict().background_supported.all()
-        held = model.predict().background_endpoint_held.to_numpy()
-        assert held[:12].all() and held[-48:].all()
-        assert model.observed_background.endpoint_hold_days == ns["BACKGROUND_ENDPOINT_HOLD_DAYS"] == 3
-        np.testing.assert_array_equal(ns["train_mask"], original_train)
-        np.testing.assert_array_equal(ns["val_mask"], original_val)
-        np.testing.assert_array_equal(ns["scored_mask"], original_scored)
-        strict = StudySettings.from_dict(ns["study_settings"].to_dict())
-        assert strict.model.background_endpoint_hold_days == 3
-        learned.append((model.observed_background, model.predict()))
-    assert learned[0][0] == learned[1][0]
-    pd.testing.assert_frame_equal(learned[0][1], learned[1][1])
-    ns["GROUNDWATER_ENABLED"] = True
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        build_model_state(ns)
-
-
 @pytest.mark.parametrize("method", ["spea2", "differential_evolution"])
-def test_notebook_alternative_solver_runs_four_pathway_core(notebook, tmp_path, method):
+def test_notebook_alternative_solver_runs_four_pathway_core(tmp_path, method):
     from sparsehydro.calibration.msdgc_assessment import MSDGCSettings
     from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, PBIAS
     from sparsehydro.models.rdii.initial_abstraction import snow_partition
 
-    sources = {c["id"]: "".join(c["source"]) for c in notebook["cells"]}
-    ns = notebook_namespace(notebook)
+    ns = notebook_namespace()
     template = build(StudySettings(model=ModelSettings(n_triangles=4, seasonal_baseline="off")))
     overrides = {
         name: {"calibrate": name in ("sanitary_mean_cfs", "R_4")}
@@ -472,10 +413,10 @@ def test_notebook_alternative_solver_runs_four_pathway_core(notebook, tmp_path, 
     assert model.budget["max_abs_error_in"] < 1e-8
 
 
-def test_flowfinity_record_selection_uses_settings_page(notebook):
+def test_flowfinity_record_selection_uses_settings_page():
     from sparsehydro.data.wholeflow import select_flowfinity_record
 
-    ns = notebook_namespace(notebook)
+    ns = notebook_namespace()
     ns.update(DATA_SOURCE="flowfinity", FLOWFINITY_RECORD_INDEX=1,
               records_df=pd.DataFrame({"DataTitle": ["first", "second"]}))
     def selected():

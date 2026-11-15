@@ -1,8 +1,5 @@
 """Shared fixtures for package-level tests migrated from inline notebook code."""
 
-import json
-from copy import deepcopy
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -18,22 +15,12 @@ from sparsehydro.calibration.msdgc_assessment import MSDGCSettings
 from sparsehydro.calibration.splits import SplitConfig
 from sparsehydro.calibration.wholeflow_workflow import parameter_table
 from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternEstimate
-
-
-NOTEBOOK = Path(__file__).parents[1] / "sparsehydro" / "notebooks" / "flowfinity_gwi_wholeflow_pattern_joint.ipynb"
-
-
-@lru_cache(maxsize=1)
-def _default_controls():
-    namespace = {}
-    for cell in json.loads(NOTEBOOK.read_text(encoding="utf-8"))["cells"]:
-        if cell["cell_type"] == "code" and cell["id"].startswith("pattern-settings-"):
-            exec("".join(cell["source"]), namespace)
-    return {name: value for name, value in namespace.items() if not name.startswith("__")}
+from sparsehydro.studies.msdgc import default_controls
 
 
 def controls():
-    return deepcopy(_default_controls())
+    """Fresh copy of the study defaults (formerly read from the notebook settings cells)."""
+    return default_controls()
 
 
 def configure_state(namespace):

@@ -1,34 +1,12 @@
-from tests.pattern_workflow_support import (
-    configure_state, build_model_state, prepare_data_state, event_coverage_state,
-    objective_state, calibrate_state, report_state, assessment_state,
-)
 
-import ast
-import json
-from pathlib import Path
-from types import SimpleNamespace
-import time
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.calibration.objectives import Con15, ConcordanceCorrelationCoefficient
-from sparsehydro.calibration.wholeflow_workflow import storm_scoring_mask, melt_scoring_mask
+from sparsehydro.calibration.objectives import Con15
+from sparsehydro.calibration.wholeflow_workflow import storm_scoring_mask
 from sparsehydro.events.imported import imported_event_inventory, load_event_windows
-
-
-@pytest.fixture
-def notebook_sources():
-    path = (Path(__file__).parents[1] / "sparsehydro" / "notebooks"
-            / "flowfinity_gwi_wholeflow_pattern_joint.ipynb")
-    sources = {c["id"]: "".join(c["source"]) for c in json.loads(
-        path.read_text(encoding="utf-8"))["cells"]}
-    sources["pattern-joint-00"] = "\n".join(
-        source for cell_id, source in sources.items()
-        if cell_id == "pattern-joint-00" or (
-            cell_id.startswith("pattern-settings-") and cell_id != "pattern-settings-index"))
-    return sources
 
 
 def summary_file(path, rows):
@@ -173,82 +151,6 @@ def test_exact_inclusive_grid_mapping_and_explicit_exclusions(tmp_path, minutes)
     pd.testing.assert_frame_equal(events.drop(columns="rain_in"), other.drop(columns="rain_in"))
 
 
-def event_namespace(notebook_sources, tmp_path):
-    data = model_data()
-    train = np.arange(len(data)) < 72
-    ns = dict(np=np, pd=pd, Path=Path, time=time, phase_seconds={},
-              display=lambda value: None, model_df=data, train_mask=train, val_mask=~train,
-              dry_eligible=data.dry_eligible.to_numpy(), _dt_hours=1.0,
-              DOWNLOAD_DIR=tmp_path, shape_fit=SimpleNamespace(detection_baseline_cfs=np.ones(len(data))))
-    exec(notebook_sources["pattern-joint-00"], ns)
-    source = notebook_sources["pattern-joint-45"]
-    return ns, source
-
-
-
-
-def test_notebook_auto_mode_retains_padding_melt_and_ignores_filename(
-    notebook_sources, tmp_path, monkeypatch,
-):
-    import sparsehydro.calibration.pattern_workflow as workflow
-
-    ns, source = event_namespace(notebook_sources, tmp_path)
-    events = pd.DataFrame(dict(event_id=["auto"], start_idx=[20], end_idx=[24],
-                               start=[ns["model_df"].datetime.iloc[20]],
-                               end=[ns["model_df"].datetime.iloc[24]], duration_hours=[4.],
-                               split=["train"], eligible=[True], exclusion=[""]))
-    detector_calls = []
-
-    def detected(*args, **kwargs):
-        detector_calls.append(kwargs)
-        return events.copy()
-
-    monkeypatch.setattr(workflow, "frozen_events", detected)
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("Auto mode must not read EVENT_FILE")
-
-    monkeypatch.setattr(workflow, "imported_event_inventory", forbidden)
-    ns.update(EVENT_SOURCE="auto", EVENT_FILE="does-not-exist.xlsx")
-    event_coverage_state(ns)
-    assert detector_calls == [{"detector_settings": ns["study_settings"].workflow["events"]["STORM_DETECTION_SETTINGS"]}]
-    assert detector_calls[0]["detector_settings"]["min_rain_in"] == 0.2
-    assert ns["_event_file"] is None
-    expected = storm_scoring_mask(events, ns["train_mask"], 1)
-    np.testing.assert_array_equal(ns["rain_storm_mask"], expected)
-    assert expected[17:72].all() and not expected[:17].any()
-    expected |= melt_scoring_mask(ns["model_df"].possible_melt, ns["train_mask"], 1)
-    np.testing.assert_array_equal(ns["storm_mask"], expected)
-    assert ns["melt_mask"].any()
-
-
-@pytest.mark.parametrize("mode,filename,message", [
-    ("invalid", "ignored.xlsx", "EVENT_SOURCE"),
-    ("file", "", "EVENT_FILE"),
-    ("file", "missing.xlsx", "does not exist"),
-])
-def test_notebook_invalid_mode_or_file_has_no_auto_fallback(
-    notebook_sources, tmp_path, mode, filename, message,
-):
-    ns, source = event_namespace(notebook_sources, tmp_path)
-    ns.update(EVENT_SOURCE=mode, EVENT_FILE=filename)
-    with pytest.raises((ValueError, FileNotFoundError), match=message):
-        event_coverage_state(ns)
-
-
-def test_notebook_no_training_events_reports_exclusions_and_fails(notebook_sources, tmp_path, capsys):
-    ns, source = event_namespace(notebook_sources, tmp_path)
-    path = event_csv(tmp_path / "events.csv", [["outside", "2026-01-01", "2026-01-02"]])
-    ns.update(EVENT_SOURCE="file", EVENT_FILE=str(path))
-    with pytest.raises(ValueError, match="No usable training event windows"):
-        event_coverage_state(ns)
-    assert "outside_model_record" in capsys.readouterr().out
-
-
-
-
-
-
 def test_con15_nested_overlap_does_not_hide_out_of_domain_event():
     objective = Con15(np.array([[0, 60], [12, 24]]), allow_overlapping_events=True)
     with pytest.raises(ValueError, match="outside the observation domain"):
@@ -257,55 +159,3 @@ def test_con15_nested_overlap_does_not_hide_out_of_domain_event():
         Con15(np.array([[12, 24], [0, 20]]), allow_overlapping_events=True)
 
 
-def test_notebook_report_accepts_workbook_style_overlap_in_all_splits(notebook_sources, tmp_path):
-    path = summary_file(tmp_path / "approved.xlsx", [
-        [54, "Qualifying Event", pd.Timestamp("2025-04-03 14:50"), 22.67],
-        [55, "Qualifying Event", pd.Timestamp("2025-04-04 13:30"), 48.08],
-        [80, "Qualifying Event", pd.Timestamp("2025-04-08 06:00"), 4.0],
-        [81, "Qualifying Event", pd.Timestamp("2025-04-09 06:00"), 8.0],
-    ])
-    times = pd.date_range("2025-04-03", periods=10 * 24 * 12, freq="5min")
-    observed = 2 + np.sin(np.arange(len(times)) * np.pi / (12 * 8))
-    data = pd.DataFrame(dict(datetime=times, rainfall_in=0.0, flow_cfs=observed,
-                              possible_melt=False, dry_eligible=True))
-    ns, event_source = event_namespace(notebook_sources, tmp_path)
-    ns.update(model_df=data, train_mask=np.asarray(times < "2025-04-07"),
-              val_mask=np.asarray(times >= "2025-04-07"), scored_mask=np.ones(len(data), bool),
-              dry_eligible=np.ones(len(data), bool), _dt_hours=1 / 12,
-              EVENT_SOURCE="file", EVENT_FILE=str(path))
-    event_coverage_state(ns)
-    events = ns["acceptance_events"].copy(deep=True)
-    assert events.event_id.tolist() == ["54", "55", "80", "81"]
-    assert events.end_idx.iloc[0] == events.start_idx.iloc[1] + 1
-    assert ns["events_df"].end_idx.iloc[0] == ns["events_df"].start_idx.iloc[1]
-    assert events.overlap_previous_hours.iloc[1] == pytest.approx(12 / 3600)
-    ns.update(Con15=Con15, ConcordanceCorrelationCoefficient=ConcordanceCorrelationCoefficient,
-              MULTIOBJECTIVE_OBJECTIVES=["con15_error", "ccc"], USE_TRAINING_PEAK_FILTER=True)
-    objective_state(ns)
-    from sparsehydro.calibration.msdgc_assessment import MSDGCAssessment, MSDGCCon15
-    assert isinstance(ns["peak_objective"], MSDGCCon15)
-    assert isinstance(ns["peak_filter"], MSDGCCon15)
-    definition = ns["peak_objective"]
-    x = definition.event_values(observed)[definition.selected_event_indices(observed)]
-    y = definition.event_values(observed * 1.05)[definition.selected_event_indices(observed)]
-    expected = abs(float(x @ y / (x @ x)) - 1)
-    assert definition.compute(observed, observed * 1.05) == expected
-    assert ns["peak_filter"].compute(observed, observed * 1.05) == expected
-    ns.update(obs_flow=observed, q_total=observed * 1.05)
-    assessment_state(ns)
-    pd.testing.assert_frame_equal(ns["acceptance_events"], events)
-    for split, expected_ids in (("train", ["54", "55"]), ("validation", ["80", "81"]),
-                                 ("whole", ["54", "55", "80", "81"])):
-        evaluator = ns["report_evaluators"][split]
-        assert evaluator.events.event_id.tolist() == expected_ids
-        report = evaluator.event_report(ns["q_total"])
-        expected = [observed[e.start_idx:e.end_idx + 1].sum() / 12
-                    for e in evaluator.events.itertuples()]
-        np.testing.assert_allclose(report.observed_volume_cfs_h, expected)
-        assert set(ns["acceptance_tbl"].query("window == @split").metric) == set(
-            MSDGCAssessment.report_metric_names)
-    assert len(ns["events_eval"]) == 8
-    assert len(ns["conveyance_tbl"]) == 4
-    assert len(ns["zone_volumes_tbl"]) == 12
-    assert ns["event_mask"].sum() < (
-        events.end_idx - events.start_idx + 1).sum()

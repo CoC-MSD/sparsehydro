@@ -1,10 +1,8 @@
 from tests.pattern_workflow_support import (
-    configure_state, build_model_state, prepare_data_state, event_coverage_state,
-    objective_state, calibrate_state, report_state, assessment_state,
+    controls,
+    configure_state, prepare_data_state, event_coverage_state,
 )
 
-import json
-from pathlib import Path
 from types import SimpleNamespace
 import time
 
@@ -131,8 +129,6 @@ def test_existing_groundwater_releases_while_new_snow_is_stored():
     assert p.budget_error_in.abs().max() < 1e-8
 
 
-
-
 def test_melt_only_windows_are_padded_clipped_and_not_dry():
     melt = np.zeros(100)
     melt[30:33] = .001
@@ -151,12 +147,6 @@ def test_melt_only_windows_are_padded_clipped_and_not_dry():
         melt_scoring_mask(-melt, split, 1)
 
 
-NOTEBOOK = Path(__file__).resolve().parents[1] / "sparsehydro" / "notebooks" / "flowfinity_gwi_wholeflow_pattern_joint.ipynb"
-
-
-def notebook_cell(cell_id):
-    cells = json.loads(NOTEBOOK.read_text(encoding="utf-8"))["cells"]
-    return "".join(next(c["source"] for c in cells if c["id"] == cell_id))
 
 
 @pytest.mark.parametrize("calibrate_snow", [False, True])
@@ -169,11 +159,7 @@ def test_notebook_spinup_snow_is_continuous_and_masks_are_melt_aware(calibrate_s
     frame = forcing(rain, temp).assign(flow_cfs=.5)
     cfg = SplitConfig(dt_hours=1, warmup_days=1, spinup_mode="repeat_head",
                       split_mode="continuous", snap_edges_to_dry=False)
-    ns = {}
-    for cell in json.loads(NOTEBOOK.read_text(encoding="utf-8"))["cells"]:
-        if cell["cell_type"] == "code" and (
-                cell["id"] == "pattern-joint-00" or cell["id"].startswith("pattern-settings-")):
-            exec("".join(cell["source"]), ns)
+    ns = controls()
     ns.update(np=np, pd=pd, time=time, model_df=frame, SPLIT_CFG=cfg, DT_HOURS=1,
               TIMESTEP="1h", WARMUP_DAYS=1, SPINUP_MODE="repeat_head",
               SPLIT_MODE="continuous", DRY_EXCLUSION_HOURS=48, SNOW_ENABLED=True,

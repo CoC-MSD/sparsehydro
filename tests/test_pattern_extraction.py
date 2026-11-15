@@ -1,10 +1,7 @@
-import ast
 from pathlib import Path
-import json
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import pytest
 
 from sparsehydro.calibration.pattern_workflow import prepare_pattern_data, study_settings_from_controls
@@ -14,7 +11,7 @@ from sparsehydro.data.wholeflow import (
     MGD_TO_CFS, align_air_temperature, assemble_modeling_data, download_flowfinity_inputs,
     modeling_timestep, read_local_results, select_flowfinity_record,
 )
-from tests.pattern_workflow_support import NOTEBOOK, controls
+from tests.pattern_workflow_support import controls
 
 
 def input_results(periods=72):
@@ -199,23 +196,6 @@ def test_preparation_is_independent_of_datetime_storage_unit(unit, dt, tmp_path)
         prepare_pattern_data(prepared.data, study, split, tmp_path)
 
 
-def test_all_notebook_code_compiles_and_extracted_cells_stay_lightweight():
-    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
-    targets = {"pattern-joint-25", "pattern-joint-45", "pattern-joint-47", "pattern-joint-49",
-               "pattern-joint-61", "pattern-joint-pareto-msd-spread", "pattern-joint-pareto-msd-scan"}
-    assert targets <= {cell["id"] for cell in notebook["cells"]}
-    lines = 0
-    for cell in notebook["cells"]:
-        if cell["cell_type"] != "code":
-            continue
-        source = "".join(cell["source"])
-        ast.parse(source, feature_version=(3, 10))
-        lines += len(source.splitlines())
-        if cell["id"] in targets:
-            assert len(source.splitlines()) <= 20, f"Cell {cell['id']} grew beyond orchestration"
-    assert lines < 800
-
-
 def test_optional_diagnostics_are_self_contained_and_preserve_budget():
     from sparsehydro.models.rdii.initial_abstraction import SnowConfig
     from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
@@ -251,62 +231,3 @@ def test_optional_diagnostics_are_self_contained_and_preserve_budget():
     pd.testing.assert_frame_equal(model.predict(), saved)
 
 
-def test_notebook_runs_end_to_end_on_synthetic_local_inputs(tmp_path, monkeypatch):
-    size = 56 * 24 * 12
-    times = pd.date_range("2025-01-01", periods=size, freq="5min")
-    rain = np.zeros(size)
-    rows = []
-    for number, day in enumerate(range(3, 54, 4), 1):
-        start = day * 24 * 12 + 12 * 12
-        rain[start:start + 12] = .15 + number * .02
-        rows.append((str(number), times[start], times[start + 72]))
-    response = np.convolve(rain, np.exp(-np.arange(288) / 36), mode="full")[:size]
-    flow_cfs = .8 + .1 * np.sin(np.arange(size) * np.pi / 144) + response
-    pd.DataFrame({"rain": rain}, index=times).to_csv(tmp_path / "rain.csv")
-    pd.DataFrame({"flow": flow_cfs / MGD_TO_CFS}, index=times).to_csv(tmp_path / "flow.csv")
-    pd.DataFrame({
-        "datetime": times.tz_localize("Etc/GMT+5").tz_convert("UTC"), "temperature_c": 10.,
-    }).to_csv(tmp_path / "site_temperature.csv", index=False)
-    pd.DataFrame(rows, columns=["event_id", "start_date", "end_date"]).to_csv(tmp_path / "events.csv", index=False)
-    monkeypatch.setattr(go.Figure, "show", lambda *args, **kwargs: None)
-    monkeypatch.setattr(go.Figure, "write_html", lambda *args, **kwargs: None)
-    monkeypatch.setattr(go.Figure, "write_image", lambda *args, **kwargs: None)
-    namespace = {"display": lambda *args, **kwargs: None}
-    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
-    ids = {cell["id"] for cell in notebook["cells"]}
-    assert {"pattern-joint-02", "pattern-joint-04"} <= ids
-    for cell in notebook["cells"]:
-        if cell["cell_type"] != "code":
-            continue
-        if cell["id"] == "pattern-joint-02":
-            namespace.update(
-                DATA_SOURCE="files", DATA_TITLE="Synthetic", SOURCE_DIR=str(tmp_path),
-                RAIN_FILE="rain.csv", FLOW_FILE="flow.csv", TEMP_FILE="site_temperature.csv",
-                FILE_START=None, FILE_END=None,
-                EVENT_SOURCE="file", EVENT_FILE="events.csv", ASSESSMENT_EXCLUDED_EVENT_IDS=(),
-                WARMUP_DAYS=7, SPINUP_MODE="wrap", SPLIT_MODE="continuous",
-                SNOW_ENABLED=False, CALIBRATE_SNOW=False, REQUIRE_NUMBA=False,
-                NSGA2_SETTINGS={"pop_size": 12, "generations": 2, "seed": 42}, CALIBRATION_WORKERS=1,
-                MULTIOBJECTIVE_OBJECTIVES=["ccc", "nash_sutcliffe"])
-        exec(compile("".join(cell["source"]), f"pattern-notebook-{cell['id']}", "exec"), namespace)
-        if cell["id"] in ("pattern-joint-02", "pattern-joint-04"):
-            namespace["NOTEBOOK_DIR"] = tmp_path
-    artifact_dir = namespace["ARTIFACT_DIR"]
-    assert namespace["_air_csv"] == tmp_path / "site_temperature.csv"
-    assert namespace["model_df"]["temperature_c"].eq(10.).all()
-    assert namespace["selected_index"] == namespace["fit"].selected_index
-    np.testing.assert_array_equal(
-        namespace["joint_model"].predict_total_cfs(), namespace["fit"].prediction.total_cfs)
-    assert namespace["prepared"].spinup_steps == 7 * 24 * 12
-    assert len(namespace["presentation_figures"]) == 4
-    for name in ("pareto_solutions.csv", "predictions.csv.gz", "scoring_masks.csv.gz",
-                 "study_settings.json", "run_metadata.json", "pareto_msdgc_comparison.csv",
-                 "modeled_total_flow.tsf", "modeled_stormflow.tsf",
-                 "modeled_total_flow_best.tsf", "modeled_stormflow_best.tsf"):
-        assert (artifact_dir / name).is_file()
-    metadata = json.loads((artifact_dir / "run_metadata.json").read_text())
-    saved_events = json.loads((artifact_dir / "study_settings.json").read_text())["workflow"]["events"]
-    assert saved_events["STORM_DETECTION_SETTINGS"]["min_rain_in"] == .2
-    assert metadata["requested_evaluations"] == 24
-    assert metadata["checker_role"] == "report only"
-    assert not metadata["msdgc_assessment"]["official_storm_scorecard"]

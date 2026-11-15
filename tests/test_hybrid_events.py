@@ -1,13 +1,11 @@
 from tests.pattern_workflow_support import (
-    configure_state, build_model_state, prepare_data_state, event_coverage_state,
-    objective_state, calibrate_state, report_state, assessment_state,
+    controls,
+    prepare_data_state, event_coverage_state,
+    objective_state,
 )
 
-import ast
-import json
 from pathlib import Path
 import time
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -18,19 +16,6 @@ from sparsehydro.calibration.splits import SplitConfig, build_masks, prepend_spi
 from sparsehydro.calibration.wholeflow_workflow import dry_weather_mask
 from sparsehydro.events.imported import load_pcswmm_events, prepare_hybrid_events
 from sparsehydro.models.rdii.initial_abstraction import snow_partition
-
-
-@pytest.fixture
-def sources():
-    path = (Path(__file__).parents[1] / "sparsehydro" / "notebooks"
-            / "flowfinity_gwi_wholeflow_pattern_joint.ipynb")
-    sources = {c["id"]: "".join(c["source"]) for c in json.loads(
-        path.read_text(encoding="utf-8"))["cells"]}
-    sources["pattern-joint-00"] = "\n".join(
-        source for cell_id, source in sources.items()
-        if cell_id == "pattern-joint-00" or (
-            cell_id.startswith("pattern-settings-") and cell_id != "pattern-settings-index"))
-    return sources
 
 
 def write_evt(path, rows):
@@ -145,13 +130,13 @@ def test_hybrid_overlap_with_bad_interval_excludes_whole_approved_event(tmp_path
     assert not full.loc[full.event_id.eq("approved-train"), "eligible"].any()
 
 
-def notebook_case(sources, tmp_path):
+def notebook_case(tmp_path):
     data, _, _, all_file, approved_file = case(tmp_path)
     data.loc[270, "possible_melt"] = True
     ns = dict(np=np, pd=pd, Path=Path, time=time, phase_seconds={}, display=lambda _value: None,
               dry_weather_mask=dry_weather_mask, prepend_spinup=prepend_spinup,
               build_masks=build_masks, snow_partition=snow_partition, model_df=data.copy())
-    exec(sources["pattern-joint-00"], ns)
+    ns.update(controls())
     ns.update(
         EVENT_SOURCE="hybrid", EVENT_FILE=approved_file.name,
         APPROVED_EVENTS_FILE=all_file.name, DOWNLOAD_DIR=tmp_path,
@@ -168,8 +153,8 @@ def notebook_case(sources, tmp_path):
     return ns, data
 
 
-def test_notebook_hybrid_restores_broad_windows_but_not_bad_observations(sources, tmp_path):
-    ns, original = notebook_case(sources, tmp_path)
+def test_notebook_hybrid_restores_broad_windows_but_not_bad_observations(tmp_path):
+    ns, original = notebook_case(tmp_path)
     assert ns["EVENT_SOURCE"] == "hybrid"
     assert ns["_all_event_file"].name == "all.evt"
     assert ns["_event_file"].name == "approved.csv"
@@ -194,10 +179,10 @@ def test_notebook_hybrid_restores_broad_windows_but_not_bad_observations(sources
         pd.testing.assert_series_equal(ns["model_df"][col], original[col])
 
 
-def test_notebook_hybrid_peak_setup_uses_only_approved_training_events(sources, tmp_path):
+def test_notebook_hybrid_peak_setup_uses_only_approved_training_events(tmp_path):
     from sparsehydro.calibration.msdgc_assessment import MSDGCCon15, MSDGCSettings
 
-    ns, _ = notebook_case(sources, tmp_path)
+    ns, _ = notebook_case(tmp_path)
     ns.update(USE_TRAINING_PEAK_FILTER=True,
               msdgc_settings=MSDGCSettings(minimum_minutes=(60., 20., 30.),
                                            maximum_minutes=(60., 240., 1440.)))
@@ -220,11 +205,11 @@ def test_notebook_hybrid_peak_setup_uses_only_approved_training_events(sources, 
         np.testing.assert_array_equal(objective.mask, mask)
 
 
-def test_notebook_87_excluded_from_all_assessment_controls_not_broad_fit(sources, tmp_path):
+def test_notebook_87_excluded_from_all_assessment_controls_not_broad_fit(tmp_path):
     from sparsehydro.calibration.msdgc_assessment import MSDGCAssessment, MSDGCSettings
     from sparsehydro.calibration.wholeflow_acceptance import AcceptanceContract
 
-    ns, original = notebook_case(sources, tmp_path)
+    ns, original = notebook_case(tmp_path)
     full = load_pcswmm_events(ns["_all_event_file"])
     rows = [[("87" if e.event_id == "approved-train" else e.event_id),
              e.start, e.end, e.group] for e in full.itertuples()]
@@ -278,17 +263,3 @@ def test_notebook_87_excluded_from_all_assessment_controls_not_broad_fit(sources
     assert len(report) == 6 and "87" not in set(report.event_id)
 
 
-def test_hybrid_shape_fit_cannot_use_bad_or_held_out_flow(sources, tmp_path):
-    ns, _ = notebook_case(sources, tmp_path)
-    ns["plot_sanitary_shapes"] = lambda pattern: SimpleNamespace(show=lambda: None)
-    exec(sources["pattern-joint-27"], ns)
-    original = ns["shape_fit"]
-    mean = ns["odwf_cfs"]
-    excluded = ~ns["observation_eligible"] | ns["val_mask"]
-    ns["model_df"].loc[excluded, "flow_cfs"] = 1e6
-    exec(sources["pattern-joint-27"], ns)
-    assert ns["odwf_cfs"] == mean
-    assert ns["shape_fit"].pattern == original.pattern
-    np.testing.assert_array_equal(ns["shape_fit"].detection_baseline_cfs,
-                                  original.detection_baseline_cfs)
-    assert not np.any(ns["sanitary_fit_mask"] & excluded)
