@@ -11,7 +11,8 @@ from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient
 from sparsehydro.calibration.msdgc_assessment import CFS_H_TO_MG, MSDGCAssessment, MSDGCSettings
 from sparsehydro.calibration.result import CalibrationResult
 from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
-from sparsehydro.calibration.wholeflow_workflow import FeasibleCalibrationProblem, dry_weather_mask, select_peak_filtered_pareto
+from sparsehydro.calibration.problem import CalibrationProblem
+from sparsehydro.calibration.wholeflow_workflow import dry_weather_mask, select_peak_filtered_pareto
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
 from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel, estimate_sanitary_shapes
 
@@ -174,9 +175,10 @@ def test_notebook_explicitly_wires_area_into_calibration(calibrate_area, snow_mo
     assert area.value == pytest.approx(20.26)
     assert area.lower_bound == pytest.approx(14.182)
     assert area.upper_bound == pytest.approx(26.338)
-    problem = FeasibleCalibrationProblem(
+    problem = CalibrationProblem(
         model, ns["model_df"], objectives=[NashSutcliffe()],
-        column_map={"observed": "flow_cfs", "predicted": "total_cfs"})
+        column_map={"observed": "flow_cfs", "predicted": "total_cfs"},
+        skip_infeasible=True)
     assert ("area_acres" in problem.param_names) == calibrate_area
     assert problem.n_params == 20 + int(calibrate_area) + 2 * int(snow_mode == "calibrated")
     assert ("snow_T" in problem.param_names) == (snow_mode == "calibrated")

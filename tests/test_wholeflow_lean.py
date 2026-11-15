@@ -7,7 +7,7 @@ import pytest
 
 from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
 from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
-from sparsehydro.calibration.wholeflow_workflow import FeasibleCalibrationProblem
+from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.enums import ModelState
 from sparsehydro.models import wholeflow_compact
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig
@@ -139,13 +139,14 @@ def problem_for(model, data, lean):
     train = np.arange(len(data)) < 200
     storm = train & (np.arange(len(data)) >= 60)
     model.get_scalar_parameter("area_acres").calibrate = True
-    return FeasibleCalibrationProblem(
+    return CalibrationProblem(
         model, data.assign(flow_cfs=data.flow_cfs.where(train)),
         objectives=[ConcordanceCorrelationCoefficient(mask=storm),
                     NashSutcliffe(mask=train)],
         column_map={"observed": "flow_cfs",
                     "predicted": (lambda values: values) if lean else "total_cfs"},
         predict_fn=CompactWholeFlowModel.predict_total_cfs if lean else None,
+        skip_infeasible=True
     )
 
 
@@ -160,7 +161,7 @@ def test_lean_callback_receives_worker_and_preserves_penalties(make_model, monke
 
     problem._predict_fn = predict
     worker = problem.make_copy()
-    assert isinstance(worker, FeasibleCalibrationProblem)
+    assert isinstance(worker, CalibrationProblem) and worker._skip_infeasible
     assert worker._model is not model
     x = np.array([model.get_scalar_parameter(n).value for n in problem.param_names])
     x[problem.param_names.index("area_acres")] = 25.0

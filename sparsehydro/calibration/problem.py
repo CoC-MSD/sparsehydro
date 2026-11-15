@@ -169,6 +169,12 @@ class CalibrationProblem:
         model. Pair array results with an appropriate predicted extractor.
         When unset, the existing array-prediction fast path is unchanged.
     :type predict_fn: Callable or None
+    :param skip_infeasible: When ``True``, a parameter vector that violates any
+        of the model's inequality constraints is not run: every objective gets
+        ``penalty_weight * (1 + sum(max(0, g)**2))`` instead. Use it for models
+        whose ``predict()`` refuses infeasible vectors. With
+        ``penalty_weight=0`` an infeasible vector scores 0.
+    :type skip_infeasible: bool
     :param prepare_kwargs: Extra keyword arguments forwarded to ``prepare_fn``.
     :type prepare_kwargs: Any
 
@@ -192,6 +198,7 @@ class CalibrationProblem:
         mask: "str | Callable | np.ndarray | None" = None,
         *,
         predict_fn: Callable[[Any], Any] | None = None,
+        skip_infeasible: bool = False,
         **prepare_kwargs: Any,
     ) -> None:
         if objectives is None or len(objectives) == 0:
@@ -213,6 +220,7 @@ class CalibrationProblem:
         self._column_map = cmap
         self._prepare_fn = prepare_fn
         self._predict_fn = predict_fn
+        self._skip_infeasible = bool(skip_infeasible)
         self._prepare_kwargs = prepare_kwargs
 
         # ------------------------------------------------------------------
@@ -480,6 +488,10 @@ class CalibrationProblem:
         :returns: 1-D array of length :attr:`n_objectives` in minimisation form.
         :rtype: numpy.ndarray
         """
+        if self._skip_infeasible:
+            penalty = self._infeasible_penalty(x, penalty_weight)
+            if penalty is not None:
+                return np.full(len(self._objectives), penalty)
         predicted, clean = self._run_model(x)
 
         F = np.empty(len(self._objectives), dtype=float)
@@ -520,6 +532,10 @@ class CalibrationProblem:
                 f"objective index {index} out of range for "
                 f"{len(self._objectives)} objectives"
             )
+        if self._skip_infeasible:
+            penalty = self._infeasible_penalty(x, penalty_weight)
+            if penalty is not None:
+                return penalty
         predicted, clean = self._run_model(x)
         val = self._score(index, self._objectives[index], predicted, clean)
         if penalty_weight > 0.0 and self._n_ieq_constr > 0:
@@ -530,6 +546,19 @@ class CalibrationProblem:
     # Evaluation internals
     # ------------------------------------------------------------------
 
+    def _apply(self, x: np.ndarray) -> None:
+        """Write the calibratable parameter vector *x* into the model."""
+        for name, val in zip(self._param_names, x):
+            self._model.apply_flat_parameter(name, float(val))
+
+    def _infeasible_penalty(self, x: np.ndarray, penalty_weight: float) -> float | None:
+        """Penalty for an infeasible *x*, or ``None`` when *x* is feasible."""
+        self._apply(x)
+        violation = np.maximum(np.asarray(self._model.inequality_constraints(), float), 0.0)
+        if violation.any():
+            return penalty_weight * (1.0 + float(np.sum(violation ** 2)))
+        return None
+
     def _run_model(self, x: np.ndarray) -> tuple[np.ndarray, bool]:
         """Apply *x*, run the model, and return the predicted array.
 
@@ -539,8 +568,7 @@ class CalibrationProblem:
             is free of NaN, so the precomputed selectors apply directly.
         :rtype: tuple[numpy.ndarray, bool]
         """
-        for name, val in zip(self._param_names, x):
-            self._model.apply_flat_parameter(name, float(val))
+        self._apply(x)
 
         if self._predict_fn is not None:
             predicted = np.asarray(self._result_extractor(self._predict_fn(self._model)), dtype=float)
@@ -615,15 +643,17 @@ class CalibrationProblem:
     # ------------------------------------------------------------------
 
     def make_copy(self) -> "CalibrationProblem":
-        """Return a deep-copied :class:`CalibrationProblem` safe for parallel workers.
+        """Return a deep copy of this problem that is safe for parallel workers.
 
         The deep-copied model already holds its prepared state; data preparation
         is not re-run.  All mutable state (model, observed array, bounds) is
         independent from the original.
 
+        Subclasses are preserved: the copy has the same type as ``self``.
+
         :rtype: CalibrationProblem
         """
-        cp = CalibrationProblem.__new__(CalibrationProblem)
+        cp = type(self).__new__(type(self))
         # Copy the whole namespace rather than enumerating fields: the previous
         # hand-written list had to be extended for every new attribute, and a
         # missed one surfaces as an AttributeError inside a worker process.

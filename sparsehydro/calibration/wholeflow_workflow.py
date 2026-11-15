@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 
 from sparsehydro.calibration.objectives import Con15
-from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.calibration.result import CalibrationResult, GenerationRecord
 from sparsehydro.calibration.wholeflow_acceptance import AcceptanceEvaluator, lin_ccc
 from sparsehydro.events.msdgc import find_events
@@ -205,39 +204,6 @@ def melt_scoring_mask(
     np.add.at(changes, np.maximum(0, pulses - pre), 1)
     np.add.at(changes, np.minimum(len(melt), pulses + tail + 1), -1)
     return (np.cumsum(changes[:-1]) > 0) & split
-
-
-class FeasibleCalibrationProblem(CalibrationProblem):
-    """Penalise constraint-violating vectors without calling ``predict()``.
-
-    ``CompactWholeFlowModel.predict()`` refuses infeasible vectors (``sum R > 1``
-    would create water), so they receive a dominated penalty instead of an error.
-    """
-
-    def _feasibility_penalty(self, x: np.ndarray, penalty_weight: float) -> float | None:
-        for name, value in zip(self._param_names, x):
-            self._model.apply_flat_parameter(name, float(value))
-        violation = np.maximum(np.asarray(self._model.inequality_constraints(), float), 0.0)
-        if violation.any():
-            return penalty_weight * (1.0 + float(np.sum(violation ** 2)))
-        return None
-
-    def evaluate(self, x: np.ndarray, penalty_weight: float = 1e6) -> np.ndarray:
-        penalty = self._feasibility_penalty(x, penalty_weight)
-        if penalty is not None:
-            return np.full(len(self._objectives), penalty)
-        return super().evaluate(x, penalty_weight)
-
-    def evaluate_single(self, x: np.ndarray, index: int, penalty_weight: float = 1e6) -> float:
-        if not 0 <= index < len(self._objectives):
-            raise IndexError(f"objective index {index} out of range")
-        penalty = self._feasibility_penalty(x, penalty_weight)
-        return penalty if penalty is not None else super().evaluate_single(x, index, penalty_weight)
-
-    def make_copy(self) -> "FeasibleCalibrationProblem":
-        copy = super().make_copy()
-        copy.__class__ = type(self)
-        return copy
 
 
 def feasible_history(result: CalibrationResult, limit: float = 1e5) -> tuple[CalibrationResult, int]:

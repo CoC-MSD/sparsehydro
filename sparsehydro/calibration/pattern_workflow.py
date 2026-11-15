@@ -25,12 +25,13 @@ from sparsehydro.models.wholeflow_pattern import (
 
 from .msdgc_assessment import MSDGCAssessment, MSDGCCon15, MSDGCSettings, assessment_event_inventory
 from .objectives import ConcordanceCorrelationCoefficient, IObjective, NashSutcliffe
+from .problem import CalibrationProblem
 from .result import CalibrationResult
 from .solvers.base import ISolver
 from .splits import SplitConfig, build_masks, prepend_spinup
 from .wholeflow_acceptance import AcceptanceContract
 from .wholeflow_workflow import (
-    FeasibleCalibrationProblem, dry_weather_mask, frozen_events, melt_scoring_mask,
+    dry_weather_mask, frozen_events, melt_scoring_mask,
     select_peak_filtered_pareto, snow_melt_envelope, storm_scoring_mask,
 )
 
@@ -420,7 +421,7 @@ class PatternCalibration:
     peak_objective_events: pd.DataFrame
     solver_metadata: dict[str, Any]
     verified_objectives: np.ndarray
-    problem: FeasibleCalibrationProblem
+    problem: CalibrationProblem
     solver: ISolver
     split_diagnostics: pd.DataFrame
 
@@ -497,10 +498,11 @@ def calibrate_pattern_model(
     max_error, allowance = selection["MAX_TRAINING_PEAK_ERROR"], selection["CON15_NEAR_TIE_ALLOWANCE"]
     data, train, dt = prepared.data, prepared.train_mask, prepared.split.dt_hours
     observed = data["flow_cfs"].to_numpy()
-    problem = FeasibleCalibrationProblem(
+    problem = CalibrationProblem(
         model=model, data=data.assign(flow_cfs=data["flow_cfs"].where(train)), objectives=objectives,
         column_map={"observed": "flow_cfs", "predicted": lambda values: values},
-        predict_fn=PatternWholeFlowModel.predict_total_cfs)
+        predict_fn=PatternWholeFlowModel.predict_total_cfs,
+        skip_infeasible=True)
     solver = config.build_solver()
     metadata = config.solver_metadata()
     print("Solver configuration:", metadata)

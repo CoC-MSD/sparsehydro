@@ -308,7 +308,7 @@ def test_bounded_snow_solver_is_thread_and_holdout_invariant():
     import platypus
     from sparsehydro.calibration.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
     from sparsehydro.calibration.solvers.platypus_solver import PlatypusSolver
-    from sparsehydro.calibration.wholeflow_workflow import FeasibleCalibrationProblem
+    from sparsehydro.calibration.problem import CalibrationProblem
 
     rain = np.zeros(240)
     rain[[1, 25, 50, 90, 150, 200]] = [.5, .2, .4, .3, .2, .5]
@@ -332,11 +332,12 @@ def test_bounded_snow_solver_is_thread_and_holdout_invariant():
         frame = data.copy()
         if perturb:
             frame.loc[~train, "flow_cfs"] += 1000
-        problem = FeasibleCalibrationProblem(
+        problem = CalibrationProblem(
             model, frame.assign(flow_cfs=frame.flow_cfs.where(train)),
             objectives=[ConcordanceCorrelationCoefficient(mask=storm), NashSutcliffe(mask=train)],
             column_map={"observed": "flow_cfs", "predicted": lambda values: values},
-            predict_fn=PatternWholeFlowModel.predict_total_cfs)
+            predict_fn=PatternWholeFlowModel.predict_total_cfs,
+            skip_infeasible=True)
         assert problem.param_names == ["snow_T", "snow_ddf"]
         result = PlatypusSolver(platypus.NSGAII, population_size=12, n_evaluations=48,
                                 seed=42, n_workers=workers).solve(problem)

@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from sparsehydro.calibration.objectives import NashSutcliffe
-from sparsehydro.calibration.wholeflow_workflow import FeasibleCalibrationProblem
+from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.configuration import CalibrationSettings, GROUNDWATER_PARAMETERS, ModelSettings, ParameterSettings, StudySettings
 from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
 
@@ -148,8 +148,9 @@ def test_additional_pathway_overrides_reach_calibration_and_prediction():
     )
     model = build(settings)
     data = forcing().assign(flow_cfs=1.)
-    problem = FeasibleCalibrationProblem(
-        model, data, [NashSutcliffe()], column_map={"observed": "flow_cfs", "predicted": "total_cfs"})
+    problem = CalibrationProblem(
+        model, data, [NashSutcliffe()], column_map={"observed": "flow_cfs", "predicted": "total_cfs"},
+        skip_infeasible=True)
     assert {"R_12", "uh12_T"} <= set(problem.param_names)
     assert "uh12_K" not in problem.param_names
     assert model.get_scalar_parameter("uh12_T").value == 800.
@@ -183,8 +184,9 @@ def test_parameter_selection_and_fixed_values_reach_calibration_problem():
     })
     model = build(settings)
     data = forcing().assign(flow_cfs=np.linspace(.8, 1.2, len(forcing())))
-    problem = FeasibleCalibrationProblem(model, data, [NashSutcliffe()],
-        column_map={"observed": "flow_cfs", "predicted": "total_cfs"})
+    problem = CalibrationProblem(model, data, [NashSutcliffe()],
+        column_map={"observed": "flow_cfs", "predicted": "total_cfs"},
+        skip_infeasible=True)
     assert {"ia_T_ref", "s_initial_fraction", "area_acres"} <= set(problem.param_names)
     assert "sanitary_hour_scale" not in problem.param_names
     assert not set(GROUNDWATER_PARAMETERS) & set(problem.param_names)
@@ -290,10 +292,11 @@ def test_each_solver_executes_a_configured_core_model(method, n_triangles):
     model.prepare(forcing())
     data = forcing().assign(flow_cfs=model.predict_total_cfs() * 1.03)
     train = np.ones(len(data), bool)
-    problem = FeasibleCalibrationProblem(
+    problem = CalibrationProblem(
         model, data, config.build_objectives(train, train),
         column_map={"observed": "flow_cfs", "predicted": lambda values: values},
-        predict_fn=PatternWholeFlowModel.predict_total_cfs)
+        predict_fn=PatternWholeFlowModel.predict_total_cfs,
+        skip_infeasible=True)
     result = config.build_solver().solve(problem)
     assert problem.n_params == 2
     assert result.pareto_X.shape[1] == 2

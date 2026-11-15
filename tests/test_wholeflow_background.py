@@ -7,7 +7,7 @@ import pytest
 
 from sparsehydro.calibration.objectives import NashSutcliffe
 from sparsehydro.calibration.solvers.scipy_solver import ScipySolver
-from sparsehydro.calibration.wholeflow_workflow import FeasibleCalibrationProblem
+from sparsehydro.calibration.problem import CalibrationProblem
 from sparsehydro.configuration import ModelSettings, ParameterSettings, StudySettings
 from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, ObservedBackground, PatternWholeFlowModel, estimate_observed_background, estimate_sanitary_shapes
 
@@ -346,10 +346,11 @@ def test_joint_calibration_cannot_move_frozen_background():
     for name in model.scalar_parameter_names:
         model.get_scalar_parameter(name).calibrate = name == "sanitary_hour_scale"
     original = model.observed_background
-    problem = FeasibleCalibrationProblem(
+    problem = CalibrationProblem(
         model, frame.assign(flow_cfs=frame.flow_cfs.where(train)), [NashSutcliffe(mask=train)],
         column_map={"observed": "flow_cfs", "predicted": lambda values: values},
-        predict_fn=PatternWholeFlowModel.predict_total_cfs)
+        predict_fn=PatternWholeFlowModel.predict_total_cfs,
+        skip_infeasible=True)
     result = ScipySolver(method="L-BFGS-B", maxiter=20).solve(problem)
     assert result.param_names == ["sanitary_hour_scale"]
     assert model.observed_background == original
