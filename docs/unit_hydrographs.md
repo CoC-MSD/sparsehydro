@@ -156,6 +156,36 @@ from sparsehydro.models.unithydrograph import NashUH, ClarkUH
 model = RDIIModel(uh_components=[RTKTriangle(R=0.03, T=1.0, K=2.0), NashUH(), ClarkUH()])
 ```
 
+## Setting bounds for your site
+
+The default bounds are deliberately generic so that every catchment fits
+inside them: time parameters up to 240 h (10 days), shapes up to 50, areas up
+to 10,000. For a small sewershed most of that range describes a response far
+slower than the data, which predicts almost no flow, and an optimiser can
+stall there. Narrow the upper bounds to what is plausible for the site before
+calibrating:
+
+```python
+from sparsehydro.models.unithydrograph import GammaUH
+
+uh = GammaUH()
+uh.initialize()
+uh.get_scalar_parameter("alpha").upper_bound = 10.0
+uh.get_scalar_parameter("theta").upper_bound = 24.0   # hours
+```
+
+In a composite or configuration file, use `parameters` (or
+`parameter_overrides`) with the prefixed name, for example
+`{"slow.theta": {"upper_bound": 24.0}}`; on `RDIIModel`, the forwarded names
+(`uh1_T`, `uh1_K`, ...). The parent passes the bounds down to its components.
+
+`CalibrationProblem` warns when a unit hydrograph's bounds still allow
+responses that slow: with its timing parameters at their upper bounds, the
+response takes longer than half the data record to deliver half its volume.
+The warning names the component and the parameters to narrow.
+{func}`~sparsehydro.calibration.diagnostics.slow_response_warnings` runs the
+same check on demand.
+
 ## Adding a formulation
 
 Subclass `UnitHydrographBase`, implement `_cdf` and

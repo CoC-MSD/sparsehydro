@@ -63,6 +63,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   formulations, composing from configuration, per-event scoring), run by
   `tests/test_examples.py`.
 - Documentation page "Composing models" (`docs/composition.md`).
+- `CalibrationProblem` warns when a unit hydrograph's bounds allow responses
+  so slow that much of the search range predicts almost no flow within the
+  data record (`calibration.diagnostics.slow_response_warnings`,
+  `UnitHydrographBase.slowest_median_hours`). Default bounds are unchanged.
 - `tests/test_layering.py` enforces the package layers (see `CONTRIBUTING.md`):
   no upward imports, nothing imports `sparsehydro.studies`, and package
   `__init__` files only re-export.
@@ -114,6 +118,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 - Tank models register `ae_min_le_ae_max` as an inequality constraint, so
   optimisers respect `ae_min <= ae_max` (previously only `validate()` checked
   it, which calibration does not call).
+- `RDIIModel` passes bounds and `calibrate` flags (not only values) down to
+  its abstraction model and unit hydrographs, and `CompositeModel` now also
+  passes `calibrate` flags. Predictions are unchanged.
 - Importing `sparsehydro` or `sparsehydro.models` no longer loads calibration,
   events, filters, metrics or plotting code.
 - **BREAKING:** unit hydrograph time parameters are in hours and renamed

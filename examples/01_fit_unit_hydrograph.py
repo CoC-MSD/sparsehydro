@@ -31,7 +31,8 @@ model.initialize()
 #    The default bounds cover any catchment (time scales up to 240 h). Narrow
 #    them to what is plausible for this small sewershed: most of the default
 #    range gives a response far longer than the month of data, and the
-#    optimiser can get lost there.
+#    optimiser can get lost there. (CalibrationProblem warns when bounds are
+#    that wide; delete these three lines to see the warning.)
 model.get_scalar_parameter("A").upper_bound = 50.0       # effective area
 model.get_scalar_parameter("alpha").upper_bound = 10.0   # shape
 model.get_scalar_parameter("theta").upper_bound = 24.0   # scale [h]

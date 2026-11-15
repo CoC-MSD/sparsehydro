@@ -224,6 +224,33 @@ class UnitHydrographBase(IUnitHydroComponent, ABC):
         """End of the retained response including any delay [hr]."""
         return self.delay_hours + self._support_hours()
 
+    def timing_parameters(self) -> dict[str, ScalarParameter]:
+        """Registered scalar parameters other than the amplitude (they set the response's timing and shape)."""
+        amplitude = type(self)._amplitude_param_name
+        return {n: p for n, p in self._scalar_parameters.items() if n != amplitude}
+
+    def slowest_median_hours(self) -> float:
+        """Median response time [hr] with every calibrated parameter at its upper bound.
+
+        A rough measure of how slow the search range lets this response get
+        (the amplitude does not change timing and is left alone). The
+        model's parameter values are restored afterwards. Capped at
+        :attr:`max_duration_hours`.
+        """
+        params = [p for name, p in self.timing_parameters().items() if p.calibrate]
+        saved = [p.value for p in params]
+        try:
+            for p in params:
+                p.value = p.upper_bound
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                median = self._ppf(0.5)
+            if not np.isfinite(median) or median <= 0.0:
+                median = self.max_duration_hours
+            return self.delay_hours + min(float(median), self.max_duration_hours)
+        finally:
+            for p, value in zip(params, saved):
+                p.value = value
+
     def cdf(self, t: np.ndarray) -> np.ndarray:
         """Cumulative retained response at times ``t`` [hr], including the delay.
 

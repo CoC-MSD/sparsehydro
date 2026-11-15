@@ -336,16 +336,18 @@ class CompositeModel(IModel):
     # ------------------------------------------------------------------
 
     def _sync_children(self) -> None:
-        # The composite's value and bounds are authoritative for forwarded
-        # parameters, so settings applied to the composite reach the children.
+        # The composite's value, bounds and calibrate flag are authoritative for
+        # forwarded parameters, so settings applied to the composite reach the
+        # children.
         for cname, members in self._param_map.items():
             if members[0][2] == "scalar":
                 param = self._scalar_parameters[cname]
                 for child, pname, _ in members:
                     target = child._scalar_parameters[pname]
-                    target.value = param.value
                     target.lower_bound = param.lower_bound
                     target.upper_bound = param.upper_bound
+                    target.value = param.value
+                    target.calibrate = param.calibrate
             else:
                 values = self._vector_parameters[cname].values
                 for child, pname, _ in members:

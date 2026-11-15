@@ -46,6 +46,7 @@ are specified through a single ``column_map`` dictionary.  Values can be either 
 from __future__ import annotations
 
 import copy
+import warnings
 from typing import TYPE_CHECKING, Any, Callable, Union
 
 import numpy as np
@@ -57,6 +58,7 @@ if TYPE_CHECKING:
     from ..models import IModel
 
 from .._columns import ColumnExtractor
+from .diagnostics import slow_response_warnings
 
 # Reserved keys in column_map that specify calibration roles, not column renames.
 _ROLE_KEYS = frozenset({"observed", "predicted", "mask"})
@@ -239,6 +241,7 @@ class CalibrationProblem:
             )
         else:
             prepared_data = None
+        self._warn_about_slow_responses(model, prepared_data)
 
         # ------------------------------------------------------------------
         # Extract observed array
@@ -460,6 +463,17 @@ class CalibrationProblem:
     # ------------------------------------------------------------------
     # Evaluation
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _warn_about_slow_responses(model: "IModel", prepared_data: Any) -> None:
+        """Warn when a unit hydrograph's bounds allow responses slower than the record."""
+        try:
+            times = pd.to_datetime(prepared_data["datetime"])
+            record_hours = (times.iloc[-1] - times.iloc[0]) / pd.Timedelta(hours=1)
+        except Exception:  # noqa: BLE001 - no datetime column: nothing to compare against
+            return
+        for message in slow_response_warnings(model, float(record_hours)):
+            warnings.warn(message, UserWarning, stacklevel=3)
 
     def evaluate(self, x: np.ndarray, penalty_weight: float = 1e6) -> np.ndarray:
         """Apply a parameter vector, run ``predict()``, and return objectives.

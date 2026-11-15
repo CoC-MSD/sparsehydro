@@ -537,31 +537,28 @@ class RDIIModel(IModel):
     # ------------------------------------------------------------------
 
     def _sync_to_submodels(self) -> None:
-        """Push composite registry values to sub-model registries.
+        """Push composite registry values, bounds and calibrate flags to sub-models.
 
         :returns: Nothing.
         :rtype: None
         """
-        for ia_name, composite_name in self._ia_param_name_map.items():
-            if composite_name in self._scalar_parameters:
+        pairs = [(self._ia_model, self._ia_param_name_map)]
+        pairs += list(zip(self._uh_components, self._uh_param_maps))
+        for submodel, mapping in pairs:
+            for sub_name, composite_name in mapping.items():
+                if composite_name not in self._scalar_parameters:
+                    continue
                 try:
-                    self._ia_model.get_scalar_parameter(ia_name).value = (
-                        self.get_scalar_parameter(composite_name).value
-                    )
+                    target = submodel.get_scalar_parameter(sub_name)
                 except KeyError:
-                    pass
+                    continue
+                source = self._scalar_parameters[composite_name]
+                target.lower_bound = source.lower_bound
+                target.upper_bound = source.upper_bound
+                target.value = source.value
+                target.calibrate = source.calibrate
 
-        for i, (uh, mapping) in enumerate(
-            zip(self._uh_components, self._uh_param_maps), 1
-        ):
-            for orig_name, composite_name in mapping.items():
-                try:
-                    uh.get_scalar_parameter(orig_name).value = (
-                        self.get_scalar_parameter(composite_name).value
-                    )
-                except KeyError:
-                    pass
-
+        for i, uh in enumerate(self._uh_components, 1):
             amp = type(uh)._amplitude_param_name
             if amp and getattr(type(uh), "_amplitude_is_fraction", False):
                 try:

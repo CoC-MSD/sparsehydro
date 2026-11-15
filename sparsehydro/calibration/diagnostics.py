@@ -17,6 +17,10 @@ Two entry points are provided:
 :func:`warn_if_near_bounds` turns either diagnostic frame into a one-line
 warning summary.
 
+:func:`slow_response_warnings` checks a model *before* calibration: it flags
+unit hydrographs whose search range allows responses so slow that much of the
+range predicts almost no flow within the data record.
+
 Proximity is measured **linearly** as a fraction of the ``upper - lower``
 span, matching :meth:`sparsehydro.parameters.ScalarParameter.normalize`.  The
 package carries no log-scale metadata on parameters, so log-space proximity is
@@ -31,8 +35,10 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
+from ..models.base import IModel
+from ..models.unithydrograph.base import UnitHydrographBase
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ..models.base import IModel
     from .result import CalibrationResult
 
 
@@ -274,6 +280,64 @@ def warn_if_near_bounds(
     else:
         print(message)
     return len(names)
+
+
+def _unit_hydrographs(model: Any, path: str = "", seen: set[int] | None = None):
+    """Yield ``(path, unit hydrograph)`` for every UH inside *model* (composites, RDII, ...)."""
+    seen = set() if seen is None else seen
+    if id(model) in seen:
+        return
+    seen.add(id(model))
+    if isinstance(model, UnitHydrographBase):
+        yield path or type(model).__name__, model
+    for attr, value in vars(model).items():
+        items: list[tuple[str, Any]] = []
+        if isinstance(value, IModel):
+            items = [(attr.lstrip("_"), value)]
+        elif isinstance(value, dict):
+            items = [(str(k), v) for k, v in value.items()]
+        elif isinstance(value, (list, tuple)):
+            items = [(f"{attr.lstrip('_')}[{i}]", v) for i, v in enumerate(value)]
+        for key, child in items:
+            if isinstance(child, tuple) and child and isinstance(child[0], IModel):
+                child = child[0]  # EnsembleModel stores (model, extractor) pairs
+            if isinstance(child, IModel):
+                yield from _unit_hydrographs(child, f"{path}.{key}" if path else key, seen)
+
+
+def slow_response_warnings(model: IModel, record_hours: float, *, fraction: float = 0.5) -> list[str]:
+    """Flag unit hydrographs whose bounds allow responses slower than the data.
+
+    For each unit hydrograph in *model* (including inside composites and RDII
+    models), :meth:`~sparsehydro.models.unithydrograph.base.UnitHydrographBase.slowest_median_hours`
+    is compared with ``fraction * record_hours``. When the slowest allowed
+    response delivers less than half its volume within that time, much of the
+    search range predicts almost no flow and optimisers can stall there.
+
+    :param model: Model to check (not modified). Call after ``validate()``, which
+        pushes a parent model's bounds and flags down to its components.
+    :param record_hours: Length of the calibration record [hr].
+    :param fraction: Share of the record the median response may take.
+    :returns: One message per flagged unit hydrograph (empty when all is well).
+    """
+    if not record_hours > 0.0:
+        return []
+    messages = []
+    for path, uh in _unit_hydrographs(model):
+        try:
+            median = uh.slowest_median_hours()
+        except Exception:  # noqa: BLE001 - a diagnostic must never break calibration
+            continue
+        if median > fraction * record_hours:
+            names = ", ".join(n for n, p in uh.timing_parameters().items() if p.calibrate)
+            messages.append(
+                f"{path} ({type(uh).__name__}; parameters {names}): at the upper bounds of its "
+                f"parameters the response needs {median:.0f} h to "
+                f"deliver half its volume, but the data cover {record_hours:.0f} h. Much of the search "
+                f"range then predicts almost no flow and the optimiser can stall there; lower the upper "
+                f"bounds of its time and shape parameters to what is plausible for the site."
+            )
+    return messages
 
 
 def parameter_table(model, tolerance: float = 0.01) -> pd.DataFrame:
