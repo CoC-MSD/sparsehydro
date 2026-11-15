@@ -339,7 +339,15 @@ def _peaktail_vectors() -> list[dict[str, float]]:
 # Driver
 # ---------------------------------------------------------------------------
 
+def build_wholeflow() -> dict[str, np.ndarray]:
+    """Whole-flow preset pins (see :mod:`tests.golden.wholeflow_cases`)."""
+    from tests.golden.wholeflow_cases import build_pins
+
+    return build_pins()
+
+
 BUILDERS = {
+    "wholeflow": build_wholeflow,
     "kernels": build_kernels,
     "predictions": build_predictions,
     "objectives": build_objectives,
