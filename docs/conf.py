@@ -90,6 +90,7 @@ source_suffix = {
 # MyST — enable mermaid directive in .md files
 myst_fence_as_directive = ["mermaid"]
 myst_enable_extensions = ["colon_fence", "deflist", "fieldlist"]
+myst_heading_anchors = 3
 
 master_doc = "index"
 

@@ -59,6 +59,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   (previously bare `numpy.testing` assertions).
 - `sparsehydro.studies.msdgc.enable_notebook_logging()`: study progress is now
   logged rather than printed; call this to see it in a notebook.
+- `examples/`: four runnable scripts on the bundled sample (fitting, comparing
+  formulations, composing from configuration, per-event scoring), run by
+  `tests/test_examples.py`.
+- Documentation page "Composing models" (`docs/composition.md`).
 - `tests/test_layering.py` enforces the package layers (see `CONTRIBUTING.md`):
   no upward imports, nothing imports `sparsehydro.studies`, and package
   `__init__` files only re-export.

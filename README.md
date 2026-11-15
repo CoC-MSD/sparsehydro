@@ -388,6 +388,12 @@ model = RDIIModel(uh_components=[RTKTriangle(R=0.03, T=1.0, K=2.0), NashUH(n=3, 
 See [docs/unit_hydrographs.md](docs/unit_hydrographs.md) for the equations, the
 full table and how to add a formulation.
 
+## Examples
+
+Runnable scripts on the bundled sample data are in [examples/](examples/):
+fitting a unit hydrograph, comparing formulations, composing a model from a
+configuration file, and scoring a fit storm by storm.
+
 ## Documentation
 
 Full documentation is available at [coc-msd.github.io/SparseHydro](https://coc-msd.github.io/SparseHydro/).
