@@ -50,8 +50,7 @@ _DEFAULT_RTK = [
 #: :mod:`sparsehydro.models.convolution`, which switches on the cost ``n * m``
 #: rather than ``max(n, m)``.  Retained so existing imports keep resolving.
 _FFT_THRESHOLD = 500
-_MM_AC_PER_HR_TO_CFS = 43560.0 / (304.8 * 3600.0)
-_IN_AC_PER_HR_TO_CFS = 43560.0 / (12.0 * 3600.0)
+from ...units import IN_AC_PER_HR_TO_CFS as _IN_AC_PER_HR_TO_CFS, MM_AC_PER_HR_TO_CFS as _MM_AC_PER_HR_TO_CFS
 
 
 @registry.register

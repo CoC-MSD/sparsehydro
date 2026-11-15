@@ -18,6 +18,7 @@ from sparsehydro.enums import ModelState
 from sparsehydro.parameters import FieldRecord, ScalarParameter
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
 from sparsehydro.models.wholeflow import J_INIT_RTK, WholeFlowModel, _g_at_cap, _gwi_B_core
+from sparsehydro.units import ACRE_INCH_TO_FT3
 
 
 @dataclass(frozen=True)
@@ -212,7 +213,7 @@ class CompactWholeFlowModel(WholeFlowModel):
             g("ia_T_ref"), g("ia_T_freeze"), g("k_div"), g("k_G"), g("g_max"),
             s0, g0,
         )
-        step_cfs = g("area_acres") * 3630.0 / (self._dt_hours * 3600)
+        step_cfs = g("area_acres") * ACRE_INCH_TO_FT3 / (self._dt_hours * 3600)
         n = len(excess)
         routed = np.zeros(n)
         components = {}

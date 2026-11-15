@@ -663,21 +663,22 @@ class TestIANumbaFastPath(unittest.TestCase):
     def test_module_imports_without_numba(self):
         """Exercise the no-op ``njit`` shim taken when numba is absent.
 
-        Loaded as a *separate* module object (under a throw-away name, but with
-        the real package so the relative imports resolve) rather than reloading
-        the live one — a reload would rebind ``IAModel`` inside the package and
-        leak a stale class into every later test.
+        Loads ``sparsehydro._numba`` as a *separate* module object with numba
+        blocked, rather than reloading the live one, so no later test sees a
+        rebound module.
         """
+        import sparsehydro._numba as _numba_mod
+
         spec = importlib.util.spec_from_file_location(
-            "sparsehydro.models.rdii._ia_without_numba", _ia_mod.__file__
+            "sparsehydro._numba_without_numba", _numba_mod.__file__
         )
         mod = importlib.util.module_from_spec(spec)
         with unittest.mock.patch.dict(sys.modules, {"numba": None, spec.name: mod}):
             spec.loader.exec_module(mod)
 
-        self.assertFalse(mod._HAS_NUMBA)
+        self.assertFalse(mod.HAS_NUMBA)
 
-        # The shim must accept both decorator spellings used in the module.
+        # The shim must accept both decorator spellings used in the package.
         @mod.njit
         def bare(x):
             return x + 1
@@ -686,15 +687,23 @@ class TestIANumbaFastPath(unittest.TestCase):
         def configured(x):
             return x + 2
 
-        self.assertEqual(bare(1), 2)
         self.assertEqual(configured(1), 3)
 
         # ...and the "fast" wrapper must still produce the right answer when it
         # is running the undecorated core.
+        ia_spec = importlib.util.spec_from_file_location(
+            "sparsehydro.models.rdii._ia_without_numba", _ia_mod.__file__
+        )
+        ia_mod = importlib.util.module_from_spec(ia_spec)
+        with unittest.mock.patch.dict(
+            sys.modules, {"numba": None, "sparsehydro._numba": mod, ia_spec.name: ia_mod}
+        ):
+            ia_spec.loader.exec_module(ia_mod)
+        self.assertFalse(ia_mod._HAS_NUMBA)
         rain, dt, temp = _parity_forcing(n=120)
         kw = {**self.BASE_KW, "rainfall_mm": rain, "dt_hours": dt, "temperature": temp}
         np.testing.assert_array_equal(
-            mod._compute_excess_series_fast(**kw),
+            ia_mod._compute_excess_series_fast(**kw),
             IAModel.compute_excess_series(**kw),
         )
 

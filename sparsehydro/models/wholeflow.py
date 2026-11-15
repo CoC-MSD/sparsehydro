@@ -32,25 +32,11 @@ from sparsehydro.parameters import ScalarParameter, FieldRecord, ConstraintRecor
 from sparsehydro.enums import ModelState
 
 
-try:
-    from numba import njit
-
-    _HAS_NUMBA = True
-except Exception:                       # numba not installed -> pure-Python fallback
-    _HAS_NUMBA = False
-
-    def njit(*a, **k):                  # noqa: D401 - no-op decorator shim
-        if len(a) == 1 and callable(a[0]) and not k:
-            return a[0]
-
-        def _w(f):
-            return f
-
-        return _w
+from sparsehydro._numba import HAS_NUMBA as _HAS_NUMBA, njit  # noqa: F401 - _HAS_NUMBA re-exported
 
 
 # in.acre/hr -> cfs (same base the two-stage RTK path used).
-_IN_AC_PER_HR_TO_CFS = 43560.0 / (12.0 * 3600.0)
+from sparsehydro.units import ACRE_INCH_TO_FT3, IN_AC_PER_HR_TO_CFS as _IN_AC_PER_HR_TO_CFS
 
 # Initial (R, T[hr], K) + search bounds for fast / medium / slow triangles.
 J_INIT_RTK = [(0.03, 1.0, 2.0), (0.02, 8.0, 2.5), (0.01, 48.0, 3.0)]
@@ -414,7 +400,7 @@ class WholeFlowModel(IModel):
             self._rain, self._temp, self._dt_hours,
             g("s_max"), g("ia_k_dep"), g("ia_k0"), g("ia_kT"), g("ia_theta"),
             g("ia_T_ref"), g("ia_T_freeze"), g("k_div"), g("k_G"), g("g_max"))
-        step_cfs = g("area_acres") * 3630.0 / (self._dt_hours * 3600.0)
+        step_cfs = g("area_acres") * ACRE_INCH_TO_FT3 / (self._dt_hours * 3600.0)
         gwi_cfs = gwi * step_cfs
         # 2) Route the LIVE excess through the 3 triangles.
         n = len(excess)
@@ -580,7 +566,7 @@ class GwiStoreModelB(IModel):
             self._rain, self._temp, self._dt_hours,
             g("s_max"), g("ia_k_dep"), g("ia_k0"), g("ia_kT"), g("ia_theta"),
             g("ia_T_ref"), g("ia_T_freeze"), g("k_div"), g("k_G"), g("g_max"))
-        step_cfs = g("area_acres") * 3630.0 / (self._dt_hours * 3600.0)
+        step_cfs = g("area_acres") * ACRE_INCH_TO_FT3 / (self._dt_hours * 3600.0)
         gwi_cfs = gwi * step_cfs
         sanitary_cfs = self.sanitary.evaluate(self, gwi_cfs)
         out = pd.DataFrame({

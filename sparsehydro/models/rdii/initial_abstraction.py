@@ -52,21 +52,8 @@ from ...parameters import FieldRecord, ScalarParameter
 # the stateful recurrence in ``compute_excess_series`` is JIT-compiled; otherwise
 # the pure-Python reference below runs unchanged.  ``fastmath`` is kept OFF so the
 # compiled exp/log stay bit-identical to the reference.
-try:
-    from numba import njit  # type: ignore[import]
+from ..._numba import HAS_NUMBA as _HAS_NUMBA, njit
 
-    _HAS_NUMBA = True
-except Exception:  # pragma: no cover - depends on optional dependency
-    _HAS_NUMBA = False
-
-    def njit(*args, **kwargs):  # no-op fallback: return function undecorated
-        if len(args) == 1 and callable(args[0]) and not kwargs:
-            return args[0]                      # bare @njit
-
-        def _wrap(fn):
-            return fn
-
-        return _wrap                            # @njit(...) with options
 
 
 def _wet_step_excess(ia0: float, k_dep: float, P: float) -> float:

@@ -67,8 +67,7 @@ from .base import IModel
 #   acres → ft²            : × 43560
 #   depth → ft             : ÷ 12 (inches) or ÷ 304.8 (mm)
 #   per-hour → per-second  : ÷ 3600
-_IN_AC_PER_HR_TO_CFS = 43560.0 / (12.0 * 3600.0)
-_MM_AC_PER_HR_TO_CFS = 43560.0 / (304.8 * 3600.0)
+from ..units import IN_AC_PER_HR_TO_CFS as _IN_AC_PER_HR_TO_CFS, MM_AC_PER_HR_TO_CFS as _MM_AC_PER_HR_TO_CFS
 
 # Sigmoid steepness constant from the paper (Eq. 9 / 15): places Point 1 and
 # Point 2 at 11/12 and 1/12 of the SHCF range, respectively.

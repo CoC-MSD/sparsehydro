@@ -15,7 +15,7 @@ from .services import DownloadResult, FlowFinityClient
 from .utilities import read_tsf
 
 
-MGD_TO_CFS = 1e6 / (7.480519 * 86400.0)
+from sparsehydro.units import MGD_TO_CFS
 TIMESTEPS = {"5min": ("5min", 5.0 / 60.0), "15min": ("15min", .25),
              "60min": ("1h", 1.0), "1h": ("1h", 1.0)}
 

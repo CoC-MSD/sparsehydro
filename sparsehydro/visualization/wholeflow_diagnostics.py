@@ -20,6 +20,7 @@ from sparsehydro.data.services import DownloadResult
 from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
 from .calibration import plot_pareto_scatter_matrix
 from .display import add_val_vrects
+from ..units import ACRE_INCH_TO_FT3
 
 
 def plot_water_balance(
@@ -30,7 +31,7 @@ def plot_water_balance(
     precipitation = model.budget["initial_storage_in"] + np.cumsum(data["rainfall_in"].to_numpy())
     accounted = np.cumsum(
         prediction["et_in"] + (prediction["gwi_cfs"] + prediction["rdii_cfs"])
-        * (dt_hours * 3600) / (area * 3630) + prediction["unrouted_excess_in"])
+        * (dt_hours * 3600) / (area * ACRE_INCH_TO_FT3) + prediction["unrouted_excess_in"])
     accounted += (prediction["S_in"] + prediction["G_in"]
                   + prediction["routing_storage_in"] + prediction["SWE_in"])
     np.testing.assert_allclose(precipitation, accounted, atol=1e-8, rtol=0,
@@ -210,7 +211,7 @@ def plot_groundwater_store(data: pd.DataFrame, prediction: pd.DataFrame, model: 
     _G = data["G_in"].to_numpy()
     _g_max = model.get_scalar_parameter("g_max").value
 
-    _depth_to_cfs = float(model.get_scalar_parameter("area_acres").value) * 3630 / (dt_hours * 3600)
+    _depth_to_cfs = float(model.get_scalar_parameter("area_acres").value) * ACRE_INCH_TO_FT3 / (dt_hours * 3600)
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.3, 0.3, 0.4],
                         vertical_spacing=0.07,
                         subplot_titles=("S: source store", "G: own depth scale, with capacity",

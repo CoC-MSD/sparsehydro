@@ -20,7 +20,7 @@ import pandas as pd
 import sparsehydro.models.wholeflow as _physics_module
 import sparsehydro.models.wholeflow_pattern as _pattern_module
 from sparsehydro.configuration import StudySettings
-from sparsehydro.data.wholeflow import MGD_TO_CFS
+from sparsehydro.units import MGD_TO_CFS
 from sparsehydro.data.utilities import write_tsf
 from sparsehydro.models.wholeflow import _HAS_NUMBA, _gwi_B_core
 from sparsehydro.models.wholeflow_pattern import PatternEstimate, PatternWholeFlowModel

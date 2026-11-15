@@ -17,7 +17,6 @@ from sparsehydro.models.wholeflow import WholeFlowModel
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
 from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel
 
-MGD_TO_CFS = 1e6 / (7.480519 * 86400)
 FORCING_COLUMNS = ["datetime", "rainfall_in", "temperature_c"]
 
 
