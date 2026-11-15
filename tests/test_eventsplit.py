@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.eventsplit import EventSplit, estimate_recession_hours, per_event_scores, stratified_event_split, summarize_event_scores
+from sparsehydro.calibration.splits import EventSplit, estimate_recession_hours, per_event_scores, stratified_event_split, summarize_event_scores
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,48 @@
+"""Train/validation splitting for calibration.
+
+Two complementary strategies:
+
+* **Time blocks** (:mod:`.blocks`): forcing-only spin-up, then a continuous or
+  stratified block split of the record into warmup, training and validation
+  masks (:class:`SplitConfig`, :func:`build_masks`, :func:`prepend_spinup`).
+* **Whole events** (:mod:`.events`): each storm event goes entirely to training
+  or validation, stratified by magnitude and season, with warmup and recession
+  buffers around validation storms (:func:`stratified_event_split`).
+
+:mod:`.metrics` scores a prediction event by event (:func:`per_event_scores`).
+"""
+
+from __future__ import annotations
+
+from .blocks import (
+    SPINUP_MODES,
+    SPLIT_LABELS,
+    SPLIT_MODES,
+    SplitConfig,
+    SplitMasks,
+    build_masks,
+    dry_edge_flags,
+    label_events_by_split,
+    prepend_spinup,
+    wrap_seasonal_slip_days,
+)
+from .events import EventSplit, estimate_recession_hours, stratified_event_split
+from .metrics import per_event_scores, summarize_event_scores
+
+__all__ = [
+    "SPINUP_MODES",
+    "SPLIT_MODES",
+    "SPLIT_LABELS",
+    "SplitConfig",
+    "SplitMasks",
+    "wrap_seasonal_slip_days",
+    "prepend_spinup",
+    "dry_edge_flags",
+    "build_masks",
+    "label_events_by_split",
+    "EventSplit",
+    "stratified_event_split",
+    "estimate_recession_hours",
+    "per_event_scores",
+    "summarize_event_scores",
+]

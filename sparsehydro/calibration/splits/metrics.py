@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from sparsehydro.calibration import KGE, ConcordanceCorrelationCoefficient
+from ..objectives import KGE, ConcordanceCorrelationCoefficient
 
 __all__ = ["per_event_scores", "summarize_event_scores", "DEFAULT_OBJECTIVES"]
 

@@ -93,7 +93,7 @@ try:
 
         :param datetime: Timestamps aligned to the full model timeline.
         :param flow: Observed flow series (same length as *datetime*).
-        :param split: An :class:`~sparsehydro.eventsplit.EventSplit`.
+        :param split: An :class:`~sparsehydro.calibration.splits.EventSplit`.
         :param rainfall: Optional rainfall series; drawn as an inverted
             hyetograph on a top panel, shaded with the same split bands.
         :param temperature: Optional air-temperature series; drawn on a bottom
@@ -226,7 +226,7 @@ try:
         metric are drawn in, so it is obvious which storms drag the mean below the
         median.
 
-        :param scores: A :func:`~sparsehydro.eventsplit.per_event_scores` frame
+        :param scores: A :func:`~sparsehydro.calibration.splits.per_event_scores` frame
             (index ``event_id``; columns ``kge``, ``ccc``, optionally ``start`` /
             ``n_steps``).
         :param metrics: Metric columns to plot (default KGE + CCC).

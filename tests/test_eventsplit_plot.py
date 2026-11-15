@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("plotly")
 
-from sparsehydro.eventsplit import per_event_scores, stratified_event_split
+from sparsehydro.calibration.splits import per_event_scores, stratified_event_split
 from sparsehydro.visualization.eventsplit_plot import plot_per_event_scores, plot_split_timeline
 
 
