@@ -18,6 +18,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   optional delay `td`. See `docs/unit_hydrographs.md`.
 - `RDIIModel` accepts any unit hydrograph as a routing component and forwards
   component constraints.
+- `CompositeModel` (`composite`): named components wired by bindings
+  (`"target.input": "source.output"`), outputs as aliases, sums or products,
+  shared parameters, parameter overrides and a fixed parameter order.
+  `AbstractionUHModel` is now a preset built on it.
+- Configuration API: `build_model`, `build_objectives`, `build_solver` and
+  `load_config` (JSON, or YAML with the new `yaml` extra) build any registered
+  formulation from plain data. `objective_registry` and `solver_registry` name
+  objectives and solvers.
+- Whole-flow components, all registered: `SoilGroundwaterStore`,
+  `DegreeDaySnow`, `SanitaryTemplateModel`, `CenteredWeeklyPatternModel`,
+  `ObservedBackgroundModel`, `ExternalExcess`; pre-fit estimators in
+  `sparsehydro.models.baseflow` (including `profile_slot_levels`).
 - Whole-flow (sanitary + groundwater infiltration + RDII) models, snow
   partitioning, a soil/groundwater store, the scalar CMA-ES solver
   (`PlatypusCmaEsSolver`), train/validation splits, diagnostics, and MSDGC
@@ -47,6 +59,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   `sparsehydro.calibration.splits`.
 - **BREAKING:** `FeasibleCalibrationProblem` removed; use
   `CalibrationProblem(..., skip_infeasible=True)`.
+- **BREAKING:** `CalibrationProblem` no longer accepts `predict_fn`; calibrate
+  on `predict_arrays()` outputs through `column_map`.
+- `CompactWholeFlowModel` and `PatternWholeFlowModel` are presets over the
+  whole-flow components. Parameter names, order, bounds, constraints, outputs
+  and budgets match the previous classes (pinned in `tests/golden/wholeflow.npz`).
 - Sequential fitters start from the model's current parameter values instead
   of the middle of the bounds.
 - `RTKTriangle` lives in `sparsehydro.models.unithydrograph.rtk` (still
@@ -64,6 +81,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   data from the repository (tracked data went from about 63 MB to under 1 MB).
 - The bundled `swmmrdii` package, which could not be imported.
 - `AcceptanceContract.qcritical_cfs`.
+- **BREAKING:** `sparsehydro.models.wholeflow` (`WholeFlowModel`,
+  `GwiStoreModelB`, `RTKOnFrozenExcess`). Build these as composites of the
+  whole-flow components. The "profiled" sanitary mode is now the pre-fit
+  function `profile_slot_levels`.
 
 ### Fixed
 
