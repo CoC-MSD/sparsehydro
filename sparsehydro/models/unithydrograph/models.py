@@ -3,16 +3,13 @@
 All time parameters are in hours and kernels are exact bin averages of the
 continuous response (see :mod:`.base`). Each class is registered by name.
 
-=================  ===============  ============================================
-Class              Registry name    Cumulative response ``F(t)``
-=================  ===============  ============================================
-``NashUH``         ``nash-uh``      ``P(n, t/K)`` (regularised lower gamma)
-``GammaUH``        ``gamma-uh``     ``P(alpha, t/theta)``
-``GammaDelayUH``   ``gamma-delay-uh`` as ``GammaUH`` shifted by ``td``
-``TriangleUH``     ``triangle-uh``  piecewise quadratic, peak at ``Tp``, ends ``Tb``
-``RectangleUH``    ``rectangle-uh`` ``min(t/Tr, 1)``
-``DecayUH``        ``decay-uh``     ``1 - exp(-t/K)`` (one linear reservoir)
-=================  ===============  ============================================
+* ``NashUH`` (``nash-uh``): ``F = P(n, t/K)``, the regularised lower gamma.
+* ``GammaUH`` (``gamma-uh``): ``F = P(alpha, t/theta)``.
+* ``GammaDelayUH`` (``gamma-delay-uh``): ``GammaUH`` shifted by ``td``.
+* ``TriangleUH`` (``triangle-uh``): piecewise quadratic ``F``, peak at ``Tp``,
+  ending at ``Tb``.
+* ``RectangleUH`` (``rectangle-uh``): ``F = min(t/Tr, 1)``.
+* ``DecayUH`` (``decay-uh``): ``F = 1 - exp(-t/K)``, one linear reservoir.
 """
 
 from __future__ import annotations

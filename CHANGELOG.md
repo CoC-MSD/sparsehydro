@@ -8,51 +8,73 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ### Added
 
-- `IModel.predict_arrays()` returning model output as plain ndarrays. It defaults
-  to unwrapping `predict()`, so existing models are unaffected; the unit
-  hydrograph, composite, abstraction, seasonality and tank models override it.
-- `CalibrationProblem.evaluate_single(x, index)` for solvers that optimise one
-  objective, instead of computing all of them and discarding the rest.
-- `sparsehydro.models.convolution` with `convolve_causal()`, shared by the unit
-  hydrograph and RDII models.
-- `UnitHydrographBase`, holding the prepare/predict/finalize lifecycle that was
-  duplicated across the seven UH classes, plus `prepare_arrays()` and
-  `set_forcing()` for driving a UH without building DataFrames.
-- Golden-output regression fixtures (`tests/golden/`) pinning kernels,
-  predictions, objective values and end-to-end `evaluate()` vectors.
+- Unit hydrograph library on one convention (time in hours, kernels that are
+  exact bin averages, so results do not depend on the model time step). New
+  formulations, all registered by name: Nash cascade (`nash-uh`), gamma
+  (`gamma-uh`), SCS/NRCS dimensionless (`scs-uh`), Snyder (`snyder-uh`), Clark
+  (`clark-uh`), ModClark with lumped rainfall (`modclark-uh`), Weibull
+  (`weibull-uh`), lognormal (`lognormal-uh`), generalized gamma
+  (`gengamma-uh`) and mixtures of any of these (`mixture-uh`). Any UH takes an
+  optional delay `td`. See `docs/unit_hydrographs.md`.
+- `RDIIModel` accepts any unit hydrograph as a routing component and forwards
+  component constraints.
+- Whole-flow (sanitary + groundwater infiltration + RDII) models, snow
+  partitioning, a soil/groundwater store, the scalar CMA-ES solver
+  (`PlatypusCmaEsSolver`), train/validation splits, diagnostics, and MSDGC
+  study tooling (from the whole-flow pull request).
+- `sparsehydro.studies.msdgc.default_controls()`: the study's default settings,
+  previously only in a notebook.
+- `sparsehydro.sample_data.load_sample("tc-nb-001")`: one month of 5-minute
+  rain and stormflow shipped with the package.
+- `CalibrationProblem(skip_infeasible=True)` scores constraint-violating
+  parameter vectors with a penalty without running the model.
+- `IModel.predict_arrays()` returning model output as plain ndarrays, and
+  `CalibrationProblem.evaluate_single(x, index)`.
+- `sparsehydro.models.convolution.convolve_causal()`, shared by all routing.
+- Contributor guide, code of conduct, pull request and issue templates.
 
 ### Changed
 
-- Calibration evaluation no longer round-trips through pandas. A `PeakTailUH`
-  evaluation over a 600-step event window with four objectives went from 4390 us
-  to 181 us (24x); `evaluate_single` is 69 us (63x). A full `SequentialFitter`
-  run over a three-week window is 7.8x faster, with bit-identical fitted
-  parameters and predictions.
-- Convolution now selects direct summation or FFT overlap-add by the cost `n*m`
-  rather than `max(n, m)`. **This changes RDII results at FFT round-off level
-  (~1e-12 relative).** Short windows that previously took the FFT branch now use
-  direct summation and are both faster and more accurate; long series are up to
-  5.6x faster. The FFT branch clips round-off undershoot below zero when both
-  operands are non-negative.
-- `AbstractionUHModel` prepares its child models once in `prepare()` rather than
-  on every `predict()`.
+- **BREAKING:** unit hydrograph time parameters are in hours and renamed
+  (`GammaUH(tt, tp)` -> `alpha`, `theta`; `NashUH(k)` -> `K`;
+  `TriangleUH(tp, tt)` -> `Tp`, `Tb`; `RectangleUH(tr)` -> `Tr`;
+  `DecayUH(alpha)` -> `K`; `PeakTailUH` likewise). Old names raise `TypeError`.
+- **BREAKING:** unit hydrograph prediction is `Q = A * conv(rain, kernel)`
+  without a `dt` factor, so `A_new = A_old * dt_hours`; default `A` is 1.0.
+  `SequentialFitSummary.calibrated_areas()` divides by `dt_hours` to stay on
+  the per-step effective-area scale.
+- **BREAKING:** `sparsehydro.eventsplit` moved to
+  `sparsehydro.calibration.splits`.
+- **BREAKING:** `FeasibleCalibrationProblem` removed; use
+  `CalibrationProblem(..., skip_infeasible=True)`.
+- Sequential fitters start from the model's current parameter values instead
+  of the middle of the bounds.
+- `RTKTriangle` lives in `sparsehydro.models.unithydrograph.rtk` (still
+  importable from `sparsehydro.models.rdii`); its results are unchanged.
+- Calibration evaluation no longer round-trips through pandas (a `PeakTailUH`
+  evaluation over 600 steps with four objectives went from 4390 us to 181 us).
+- Convolution selects direct summation or FFT overlap-add by the cost `n*m`.
+  RDII results change at FFT round-off level (~1e-12 relative).
+- Tests write plot artifacts to a temporary directory, never into the
+  repository.
+
+### Removed
+
+- Notebooks, Git LFS, generated plot artifacts and most bundled monitoring
+  data from the repository (tracked data went from about 63 MB to under 1 MB).
+- The bundled `swmmrdii` package, which could not be imported.
+- `AcceptanceContract.qcritical_cfs`.
 
 ### Fixed
 
-- Unit hydrograph kernels are capped at `MAX_STEPS` (864) in all models.
-  `GammaUH`, `NashUH`, `TriangleUH` and `RectangleUH` were previously uncapped.
-  **This changes results where the cap is active** — `GammaUH` with `tp > 172`,
-  `NashUH` with `5*n*k > 863`, and `TriangleUH`/`RectangleUH` above 863 steps.
-- `NashUH` at large `n` and `k` produced an all-NaN kernel of up to 250,001
-  ordinates, costing ~125 ms per evaluation to return a value the optimiser
-  could only read as a generic penalty. Kernels are now sanitised for NaN/inf
-  and negatives before normalisation, and `NashUH`'s overflowing normalising
-  constant — which the unit-area normalisation divides out anyway — is dropped
-  when unusable. `PeakTailUH` had the same latent NaN path through its gamma
-  tail.
-- Raw kernel evaluation runs under a suppressed numpy error state; sweeping the
-  parameter box legitimately overflows intermediates, and the warning was
-  emitted once per objective evaluation.
+- Initializing a model twice no longer registers its constraints twice
+  (`RDIIModel`, `EnsembleModel`, `SeasonalityModel`, `AMMModel` and the
+  whole-flow models were affected).
+- Long unit hydrograph responses are truncated by duration and renormalised
+  instead of being cut at a fixed number of steps, which dropped part of the
+  tail; extreme parameters no longer produce NaN kernels.
+- Ten test modules deleted in the whole-flow pull request are restored, and no
+  test depends on a notebook.
 
 ## [1.0.0a2] - 2026-09-02
 
@@ -68,4 +90,5 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 - Expanded calibration objectives and solver support for weighted and multi-objective workflows.
 - Improved time-series parsing and plotting performance for large monitoring datasets.
 
+[Unreleased]: https://github.com/CoC-MSD/sparsehydro/compare/v1.0.0a2...HEAD
 [1.0.0a2]: https://github.com/CoC-MSD/sparsehydro/releases/tag/v1.0.0a2

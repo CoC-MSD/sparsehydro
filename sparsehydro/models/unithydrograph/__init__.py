@@ -2,29 +2,28 @@
 
 Every unit hydrograph is defined by its cumulative unit response ``F(t)`` with
 ``t`` in **hours**; kernels are exact bin averages, so results do not depend on
-the model time step. All classes are registered by name (``registry.create``).
+the model time step. All classes are registered by name (``registry.create``):
 
-==========================  ===================  ===================================
-Class                       Registry name        Parameters (besides ``A``, ``td``)
-==========================  ===================  ===================================
-:class:`NashUH`             ``nash-uh``          ``n``, ``K`` [hr]
-:class:`GammaUH`            ``gamma-uh``         ``alpha``, ``theta`` [hr]
-:class:`GammaDelayUH`       ``gamma-delay-uh``   ``alpha``, ``theta``, ``td`` [hr]
-:class:`SCSUH`              ``scs-uh``           ``Tp`` [hr], ``PRF`` (fixed 484)
-:class:`SnyderUH`           ``snyder-uh``        ``tL`` [hr], ``Cp``
-:class:`ClarkUH`            ``clark-uh``         ``Tc`` [hr], ``Rs`` [hr]
-:class:`ModClarkUH`         ``modclark-uh``      ``Tc``, ``Rs`` + cell travel data
-:class:`WeibullUH`          ``weibull-uh``       ``k``, ``lam`` [hr]
-:class:`LognormalUH`        ``lognormal-uh``     ``mu``, ``sigma``
-:class:`GeneralizedGammaUH` ``gengamma-uh``      ``a``, ``c``, ``scale`` [hr]
-:class:`MixtureUH`          ``mixture-uh``       weights + prefixed component params
-:class:`PeakTailUH`         ``peak-tail-uh``     ``w``, ``peak_Tp``, ``peak_Tb``,
-                                                 ``tail_alpha``, ``tail_theta``
-:class:`TriangleUH`         ``triangle-uh``      ``Tp``, ``Tb`` [hr]
-:class:`RectangleUH`        ``rectangle-uh``     ``Tr`` [hr]
-:class:`DecayUH`            ``decay-uh``         ``K`` [hr]
-:class:`RTKTriangle`        ``rtk-triangle``     ``R`` (fraction), ``T`` [hr], ``K``
-==========================  ===================  ===================================
+* :class:`NashUH` (``nash-uh``): ``n``, ``K`` [hr]
+* :class:`GammaUH` (``gamma-uh``): ``alpha``, ``theta`` [hr]
+* :class:`GammaDelayUH` (``gamma-delay-uh``): ``alpha``, ``theta``, ``td`` [hr]
+* :class:`SCSUH` (``scs-uh``): ``Tp`` [hr], ``PRF`` (fixed at 484)
+* :class:`SnyderUH` (``snyder-uh``): ``tL`` [hr], ``Cp``
+* :class:`ClarkUH` (``clark-uh``): ``Tc`` [hr], ``Rs`` [hr]
+* :class:`ModClarkUH` (``modclark-uh``): ``Tc``, ``Rs`` plus cell travel data
+* :class:`WeibullUH` (``weibull-uh``): ``k``, ``lam`` [hr]
+* :class:`LognormalUH` (``lognormal-uh``): ``mu``, ``sigma``
+* :class:`GeneralizedGammaUH` (``gengamma-uh``): ``a``, ``c``, ``scale`` [hr]
+* :class:`MixtureUH` (``mixture-uh``): weights plus prefixed component parameters
+* :class:`PeakTailUH` (``peak-tail-uh``): ``w``, ``peak_Tp``, ``peak_Tb``,
+  ``tail_alpha``, ``tail_theta``
+* :class:`TriangleUH` (``triangle-uh``): ``Tp``, ``Tb`` [hr]
+* :class:`RectangleUH` (``rectangle-uh``): ``Tr`` [hr]
+* :class:`DecayUH` (``decay-uh``): ``K`` [hr]
+* :class:`RTKTriangle` (``rtk-triangle``): ``R`` (fraction), ``T`` [hr], ``K``
+
+Every class except ``RTKTriangle`` also has an amplitude ``A`` and accepts an
+optional delay ``td`` (``delay=`` in the constructor).
 
 Standalone prediction is ``Q = A * convolve(rain_depth_per_step, kernel)``.
 Inside :class:`~sparsehydro.models.rdii.RDIIModel`, each component's kernel is

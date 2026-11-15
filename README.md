@@ -353,6 +353,24 @@ fig = plot_pareto_evolution(result)
 fig.show()
 ```
 
+## Unit hydrographs
+
+Sixteen registered unit hydrographs share one convention: time parameters in
+hours and kernels that do not depend on the model time step. They include Nash
+cascade, gamma, SCS/NRCS, Snyder, Clark, ModClark, Weibull, lognormal,
+generalized gamma, mixtures, and the RTK triangle. Any of them can route
+rainfall excess in `RDIIModel`:
+
+```python
+from sparsehydro.models.rdii import RDIIModel, RTKTriangle
+from sparsehydro.models.unithydrograph import ClarkUH, NashUH
+
+model = RDIIModel(uh_components=[RTKTriangle(R=0.03, T=1.0, K=2.0), NashUH(n=3, K=2.0), ClarkUH(Tc=6, Rs=12)])
+```
+
+See [docs/unit_hydrographs.md](docs/unit_hydrographs.md) for the equations, the
+full table and how to add a formulation.
+
 ## Documentation
 
 Full documentation is available at [coc-msd.github.io/SparseHydro](https://coc-msd.github.io/SparseHydro/).

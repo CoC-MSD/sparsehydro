@@ -251,4 +251,5 @@ drives the model and objectives on every evaluation.
    :hidden:
 
    getting_started
+   unit_hydrographs
    api

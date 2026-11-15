@@ -159,6 +159,18 @@ Then:
    invalid input instead of using `assert` or `numpy.testing`.
 7. **Add tests and documentation** as described below.
 
+### Unit hydrographs
+
+A unit hydrograph only needs its cumulative unit response: subclass
+`UnitHydrographBase`, implement `_cdf(t)` (``t`` in hours) and
+`_register_shape_parameters()`, and register it. Discretisation, truncation,
+the optional delay, the lifecycle and use inside `RDIIModel` and `MixtureUH`
+come from the base class. Add the class to the expected set in
+`tests/test_uh_library.py` so the shared conformance tests (unit area,
+timestep invariance, registry round-trip) cover it. See
+[docs/unit_hydrographs.md](docs/unit_hydrographs.md#adding-a-formulation) for a
+worked example.
+
 ## 8. Tests
 
 - Every new formulation needs tests for its lifecycle, its outputs on a small

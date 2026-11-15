@@ -279,38 +279,44 @@ Unit Hydrograph
    :show-inheritance:
    :noindex:
 
-Native UH Models
-~~~~~~~~~~~~~~~~
+Formulations
+~~~~~~~~~~~~
 
-Three self-contained :class:`~sparsehydro.models.IUnitHydroComponent`
-implementations that follow the full SparseHydro lifecycle.  All return a
-:class:`~pandas.DataFrame` with a ``"Q_pred"`` column so the same
-``column_map`` works for single models and
-:class:`~sparsehydro.models.EnsembleModel` composites.
+All unit hydrographs share :class:`~sparsehydro.models.unithydrograph.UnitHydrographBase`:
+time parameters in hours, kernels that are exact bin averages of the
+continuous response (``sum(kernel) * dt_hours == 1``), and
+``Q = A * convolve(rain, kernel)``. See :doc:`unit_hydrographs` for the
+equations, the table of formulations and how to add one.
 
-**Kernel normalisation:** ``sum(kernel) * dt_hours ≈ 1.0``
-
-**Convolution:** ``Q = convolve(rain, kernel * A * dt)[:n]``
-where ``A`` is the effective area ratio (stormflow / rain volume).
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 40 40
-
-   * - Class
-     - Parameters
-     - Kernel shape
-   * - :class:`GammaUH`
-     - A, tt (shape), tp (scale/steps)
-     - ``(t/tp)^tt · exp(-t/tp)``, normalised
-   * - :class:`NashUH`
-     - A, n (reservoirs), k (storage)
-     - ``t^(n-1) · exp(-t/k) / (k^n Γ(n))``
-   * - :class:`TriangleUH`
-     - A, tt (total steps), tp (peak)
-     - Piecewise linear; ``tp < tt``
+.. automodule:: sparsehydro.models.unithydrograph.base
+   :members:
+   :show-inheritance:
 
 .. automodule:: sparsehydro.models.unithydrograph.models
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.unithydrograph.synthetic
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.unithydrograph.clark
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.unithydrograph.distributions
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.unithydrograph.mixture
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.unithydrograph.peak_tail
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.unithydrograph.rtk
    :members:
    :show-inheritance:
 
@@ -319,7 +325,8 @@ Sequential Fitting
 
 :class:`~sparsehydro.models.unithydrograph.sequential.SequentialFitter` fits a fresh
 model instance to each storm event in chronological order, warm-starting from
-the previous event's calibrated parameters.  The predicted flow from each
+the previous event's calibrated parameters (the first event starts from the
+model's default values).  The predicted flow from each
 fitted event is subtracted from the observed signal before the next event is
 fitted (residual approach).
 
@@ -337,8 +344,8 @@ UH models and :class:`~sparsehydro.models.EnsembleModel` composites:
 
    # Two-component ensemble
    def make_ensemble():
-       fast = GammaUH(A=80.0, tt=1.5, tp=3.0)
-       slow = GammaUH(A=30.0, tt=3.0, tp=20.0)
+       fast = GammaUH(A=8.0, alpha=2.5, theta=0.25)
+       slow = GammaUH(A=3.0, alpha=4.0, theta=1.7)
        ens = EnsembleModel(
            components=[(fast, lambda p: p["Q_pred"].to_numpy()),
                        (slow, lambda p: p["Q_pred"].to_numpy())],
@@ -501,7 +508,7 @@ Initial Abstraction
    :members:
    :show-inheritance:
 
-RTK Triangle
+RTK ensemble
 ~~~~~~~~~~~~
 
 .. automodule:: sparsehydro.models.rdii.rtk_triangle
