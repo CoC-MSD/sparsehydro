@@ -47,6 +47,7 @@ import pandas as pd
 from ...enums import ModelState
 from ..base import IModel
 from ...parameters import FieldRecord, ScalarParameter
+from ...registry import registry
 
 # Optional numba acceleration for the hot excess loop.  When numba is importable
 # the stateful recurrence in ``compute_excess_series`` is JIT-compiled; otherwise
@@ -174,6 +175,7 @@ def _compute_excess_series_fast(
     )
 
 
+@registry.register
 class IAModel(IModel):
     """Stateful initial-abstraction model implementing the :class:`~sparsehydro.models.IModel` lifecycle.
 

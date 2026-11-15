@@ -129,6 +129,47 @@ class RDIIModel(IModel):
         self._ia_param_name_map: dict[str, str] = {}
         self._uh_param_maps: list[dict[str, str]] = []
 
+    @classmethod
+    def from_config(cls, spec: dict[str, Any], build) -> "RDIIModel":
+        """Build from configuration.
+
+        Keys: ``ia_model`` (a model spec), ``routing`` or ``uh_components``
+        (a list of unit hydrograph specs), ``units``, ``component_outputs``,
+        and ``excess``: the address of an upstream excess series inside a
+        composite. ``excess`` replaces the IA model with
+        :class:`~sparsehydro.models.abstraction.ExternalExcess`; the composite
+        creates the binding through :meth:`config_inputs`.
+        """
+        from ..abstraction.external import ExternalExcess
+
+        spec = dict(spec)
+        units = spec.pop("units", "imperial")
+        routing = spec.pop("routing", None)
+        if routing is None:
+            routing = spec.pop("uh_components", None)
+        excess = spec.pop("excess", None)
+        ia_spec = spec.pop("ia_model", None)
+        if excess is not None and ia_spec is not None:
+            raise ValueError("Give either 'excess' or 'ia_model', not both")
+        if excess is not None:
+            ia_model = ExternalExcess(units=units)
+        else:
+            ia_model = build(ia_spec) if ia_spec is not None else None
+        uh = build(routing) if routing is not None else None
+        component_outputs = bool(spec.pop("component_outputs", False))
+        if spec:
+            raise ValueError(f"Unknown rdii configuration keys: {sorted(spec)}")
+        return cls(ia_model=ia_model, uh_components=uh, units=units,
+                   component_outputs=component_outputs)
+
+    @classmethod
+    def config_inputs(cls, spec: dict[str, Any]) -> dict[str, str]:
+        """Bindings implied by a configuration spec (``excess`` -> excess column)."""
+        if spec.get("excess") is None:
+            return {}
+        column = "p_excess_in" if spec.get("units", "imperial") == "imperial" else "p_excess_mm"
+        return {column: spec["excess"]}
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------

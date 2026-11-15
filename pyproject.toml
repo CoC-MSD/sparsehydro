@@ -59,6 +59,9 @@ notebook = [
 excel = [
     "openpyxl>=3.1",
 ]
+yaml = [
+    "pyyaml>=6.0",
+]
 parallel = [
     "joblib>=1.3",
 ]
@@ -82,6 +85,7 @@ dev = [
     "sparsehydro[speed]",
     "sparsehydro[parallel]",
     "sparsehydro[excel]",
+    "sparsehydro[yaml]",
 ]
 
 [project.scripts]

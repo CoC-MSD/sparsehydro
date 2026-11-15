@@ -52,6 +52,12 @@ _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _DATA = "data"
 
 
+def _component_class(spec: Any) -> type | None:
+    if isinstance(spec, Mapping) and "type" in spec:
+        return registry.get(spec["type"])
+    return None
+
+
 def _split(address: str) -> tuple[str, str]:
     if not isinstance(address, str) or "." not in address:
         raise ValueError(f"expected 'component.field', got {address!r}")
@@ -119,6 +125,35 @@ class CompositeModel(IModel):
         self._output_plan: list[tuple[str, str, list[tuple[str, str]]]] = []
         self._datetime: np.ndarray | None = None
         self._data_columns: dict[str, np.ndarray] = {}
+
+    @classmethod
+    def from_config(cls, spec: Mapping[str, Any], build) -> "CompositeModel":
+        """Build from configuration.
+
+        Keys: ``components`` (``{name: spec}``; a component spec may carry
+        ``inputs: {field: "source.output"}``), ``bindings``, ``outputs`` (or
+        ``output``), ``prefixes``, ``shared``, ``parameter_overrides``,
+        ``parameter_order``, ``require_feasible``.
+        """
+        spec = dict(spec)
+        components: dict[str, IModel] = {}
+        bindings = dict(spec.pop("bindings", None) or {})
+        for name, child_spec in (spec.pop("components", None) or {}).items():
+            child_spec = dict(child_spec)
+            for field, source in (child_spec.pop("inputs", None) or {}).items():
+                bindings[f"{name}.{field}"] = source
+            implied = getattr(_component_class(child_spec), "config_inputs", None)
+            if implied is not None:
+                for field, source in implied(child_spec).items():
+                    bindings[f"{name}.{field}"] = source
+            components[name] = build(child_spec)
+        if "output" in spec:
+            spec["outputs"] = spec.pop("output")
+        unknown = set(spec) - {"outputs", "prefixes", "shared", "parameter_overrides",
+                               "parameter_order", "require_feasible"}
+        if unknown:
+            raise ValueError(f"Unknown composite configuration keys: {sorted(unknown)}")
+        return cls(components, bindings=bindings, **spec)
 
     # ------------------------------------------------------------------
     # Introspection

@@ -695,9 +695,13 @@ class TestIANumbaFastPath(unittest.TestCase):
             "sparsehydro.models.rdii._ia_without_numba", _ia_mod.__file__
         )
         ia_mod = importlib.util.module_from_spec(ia_spec)
+        from sparsehydro.registry import registry as _registry
+
+        # A second copy of the module registers IAModel again; give it an
+        # empty registry so the live one is untouched.
         with unittest.mock.patch.dict(
             sys.modules, {"numba": None, "sparsehydro._numba": mod, ia_spec.name: ia_mod}
-        ):
+        ), unittest.mock.patch.object(_registry, "_models", {}):
             ia_spec.loader.exec_module(ia_mod)
         self.assertFalse(ia_mod._HAS_NUMBA)
         rain, dt, temp = _parity_forcing(n=120)
