@@ -47,3 +47,10 @@ ayyeka_auth.py
 flowfinity_auth.py
 csvagent.json
 *.secrets.json
+
+# Notebooks and large data stay out of the repository (no Git LFS).
+# Keep notebooks locally or in a separate examples repository; runnable
+# examples live in examples/*.py.
+*.ipynb
+.ipynb_checkpoints/
+*.parquet
