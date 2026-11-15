@@ -1,17 +1,66 @@
-"""Approved event windows, independent of automatic rain/flow detection."""
+"""Reading event lists and placing them on a model record.
+
+* :func:`load_events_from_csv` — a CSV table of detected or defined events.
+* :func:`load_pcswmm_events` — a PCSWMM ``.evt`` inventory.
+* :func:`load_event_windows` — approved windows from a CSV/Excel summary.
+* :func:`map_event_windows` / :func:`imported_event_inventory` — map windows to
+  model indices and to whole training or validation splits.
+
+These windows are used exactly as supplied, independent of automatic
+detection.
+"""
 
 from __future__ import annotations
 
 import configparser
-from pathlib import Path
+import os
 import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from .records import EventRecord
+
 
 def _column_name(value: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value).strip().lower())
+
+
+def load_events_from_csv(path: str | os.PathLike) -> list[EventRecord]:
+    """Load an ``events_list.csv`` as a list of :class:`EventRecord` objects.
+
+    The CSV must have columns ``event_id``, ``start_date``, ``end_date``.
+    Fields not present in the CSV are filled with sentinel values.
+
+    :param path: Path to the ``events_list.csv`` file.
+    :type path: str or os.PathLike
+    :returns: Events parsed from the CSV (sentinel values for missing fields).
+    :rtype: list[EventRecord]
+    """
+    df = pd.read_csv(path, parse_dates=["start_date", "end_date"])
+    events: list[EventRecord] = []
+    for _, row in df.iterrows():
+        events.append(
+            EventRecord(
+                event_id=int(row["event_id"]),
+                start_datetime=pd.Timestamp(row["start_date"]),
+                end_datetime=pd.Timestamp(row["end_date"]),
+                peak_datetime=pd.NaT,
+                total_rain=0.0,
+                total_flow=0.0,
+                effective_area=0.0,
+                peak_flow=0.0,
+                b2b_start=False,
+                b2b_end=False,
+            )
+        )
+    return events
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 
 def load_pcswmm_events(path: str | Path) -> pd.DataFrame:
@@ -161,10 +210,10 @@ def imported_event_inventory(
     Every source row remains in the inventory with an explicit exclusion reason
     when outside the record, unscored, too short, or crossing train/validation.
     """
-    return _map_event_windows(data, train, validation, load_event_windows(path))
+    return map_event_windows(data, train, validation, load_event_windows(path))
 
 
-def _map_event_windows(
+def map_event_windows(
     data: pd.DataFrame, train: np.ndarray, validation: np.ndarray, events: pd.DataFrame,
 ) -> pd.DataFrame:
     times = pd.DatetimeIndex(data["datetime"])
@@ -235,8 +284,8 @@ def prepare_hybrid_events(
         b = int(times.searchsorted(event.end, side="right"))
         quality[a:b] = False
     train, validation = np.asarray(train, bool), np.asarray(validation, bool)
-    calibration = _map_event_windows(data, train & quality, validation & quality, full)
-    reports = _map_event_windows(data, train & quality, validation & quality, approved)
+    calibration = map_event_windows(data, train & quality, validation & quality, full)
+    reports = map_event_windows(data, train & quality, validation & quality, approved)
     for inventory in (calibration, reports):
         for i, event in inventory.iterrows():
             a, b = max(0, int(event["start_idx"])), min(len(data), int(event["end_idx"]) + 1)

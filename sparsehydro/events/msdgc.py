@@ -47,8 +47,10 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from ..units import GALLONS_PER_FT3
+
 # Conversion for reporting cfs·hr accumulations as million gallons (MG).
-_CF_PER_GALLON = 7.480519
+_CF_PER_GALLON = GALLONS_PER_FT3
 _SECONDS_PER_HOUR = 3600.0
 
 

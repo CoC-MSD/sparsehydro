@@ -14,7 +14,7 @@ from ..metrics.objectives import Con15
 from .wholeflow_acceptance import AcceptanceContract, AcceptanceEvaluator
 
 
-CFS_H_TO_MG = 7.480519 * 3600 / 1e6
+from ..units import CFS_H_TO_MG  # noqa: E402,F401 - re-exported
 
 
 @dataclass(frozen=True)

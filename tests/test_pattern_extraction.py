@@ -7,10 +7,11 @@ import pytest
 from sparsehydro.calibration.pattern_workflow import prepare_pattern_data, study_settings_from_controls
 from sparsehydro.calibration.splits import SplitConfig, build_masks
 from sparsehydro.data.services import DownloadResult
+from sparsehydro.data.assembly import assemble_modeling_data, modeling_timestep, read_local_results
 from sparsehydro.data.wholeflow import (
-    MGD_TO_CFS, align_air_temperature, assemble_modeling_data, download_flowfinity_inputs,
-    modeling_timestep, read_local_results, select_flowfinity_record,
+    align_air_temperature, download_flowfinity_inputs, select_flowfinity_record,
 )
+from sparsehydro.units import MGD_TO_CFS
 from tests.pattern_workflow_support import controls
 
 

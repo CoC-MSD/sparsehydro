@@ -20,6 +20,112 @@ import pandas as pd
 
 
 @dataclass
+class EventRecord:
+    """A single detected or imported storm event.
+
+    :ivar event_id: Sequential identifier starting at 1.
+    :vartype event_id: int
+    :ivar start_datetime: Event start timestamp.
+    :vartype start_datetime: pandas.Timestamp
+    :ivar end_datetime: Event end timestamp.
+    :vartype end_datetime: pandas.Timestamp
+    :ivar peak_datetime: Timestamp of the sg_0 peak within the event window.
+    :vartype peak_datetime: pandas.Timestamp
+    :ivar total_rain: Cumulative rain depth over [start, end].
+    :vartype total_rain: float
+    :ivar total_flow: Cumulative stormflow over [start, end] (clipped to ≥ 0).
+    :vartype total_flow: float
+    :ivar effective_area: ``total_flow / total_rain``.  Zero when
+        ``total_rain == 0``.
+    :vartype effective_area: float
+    :ivar peak_flow: Maximum stormflow value within the event window.
+    :vartype peak_flow: float
+    :ivar b2b_start: ``True`` if the event starts at a back-to-back trough.
+    :vartype b2b_start: bool
+    :ivar b2b_end: ``True`` if the event ends at a back-to-back trough.
+    :vartype b2b_end: bool
+    """
+
+    event_id: int
+    start_datetime: pd.Timestamp
+    end_datetime: pd.Timestamp
+    peak_datetime: pd.Timestamp
+    total_rain: float
+    total_flow: float
+    effective_area: float
+    peak_flow: float
+    b2b_start: bool = False
+    b2b_end: bool = False
+    qualifying: bool = True
+    exclusion_reason: str | None = None
+    flow_response: bool = True
+
+    def duration_hours(self) -> float:
+        """Return event duration in hours.
+
+        :returns: Duration between *start_datetime* and *end_datetime* in hours.
+        :rtype: float
+        """
+        return (self.end_datetime - self.start_datetime).total_seconds() / 3600.0
+
+    def to_dict(self) -> dict:
+        """Serialize to plain dict.
+
+        :returns: Mapping of every event field to its value.
+        :rtype: dict
+        """
+        return {
+            "event_id": self.event_id,
+            "start_datetime": self.start_datetime,
+            "end_datetime": self.end_datetime,
+            "peak_datetime": self.peak_datetime,
+            "total_rain": self.total_rain,
+            "total_flow": self.total_flow,
+            "effective_area": self.effective_area,
+            "peak_flow": self.peak_flow,
+            "b2b_start": self.b2b_start,
+            "b2b_end": self.b2b_end,
+            "qualifying": self.qualifying,
+            "exclusion_reason": self.exclusion_reason,
+            "flow_response": self.flow_response,
+        }
+
+
+def events_to_dataframe(events: list[EventRecord]) -> pd.DataFrame:
+    """Convert a list of :class:`EventRecord` objects to a DataFrame.
+
+    :param events: Events to convert (may be empty).
+    :type events: list[EventRecord]
+    :returns: One row per event with all event fields as columns.
+    :rtype: pandas.DataFrame
+    """
+    if not events:
+        return pd.DataFrame(
+            columns=[
+                "event_id", "start_datetime", "end_datetime", "peak_datetime",
+                "total_rain", "total_flow", "effective_area", "peak_flow",
+                "b2b_start", "b2b_end", "qualifying", "exclusion_reason", "flow_response",
+            ]
+        )
+    return pd.DataFrame([e.to_dict() for e in events])
+
+
+def events_to_mask(
+    events: list[EventRecord], datetimes, *, qualifying_only: bool = False,
+) -> np.ndarray:
+    """Mark timestamps inside inclusive event windows, optionally after screening."""
+    dt = pd.to_datetime(pd.Series(datetimes)).to_numpy(dtype="datetime64[ns]")
+    mask = np.zeros(dt.shape[0], dtype=bool)
+    for event in events:
+        if qualifying_only and not event.qualifying:
+            continue
+        start = np.datetime64(pd.Timestamp(event.start_datetime), "ns")
+        end = np.datetime64(pd.Timestamp(event.end_datetime), "ns")
+        mask |= (dt >= start) & (dt <= end)
+    return mask
+
+
+@dataclass
 class SubEventRecord:
     """A single-peak storm sub-event with zone boundaries and bimodality metrics.
 

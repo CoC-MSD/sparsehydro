@@ -15,7 +15,14 @@ IN_AC_PER_HR_TO_CFS: float = 43560.0 / (12.0 * 3600.0)
 #: millimetres per hour over one acre -> cfs.
 MM_AC_PER_HR_TO_CFS: float = 43560.0 / (304.8 * 3600.0)
 
-#: million US gallons per day -> cfs.
-MGD_TO_CFS: float = 1e6 / (7.480519 * 86400.0)
+#: US gallons per cubic foot.
+GALLONS_PER_FT3: float = 7.480519
 
-__all__ = ["ACRE_INCH_TO_FT3", "IN_AC_PER_HR_TO_CFS", "MM_AC_PER_HR_TO_CFS", "MGD_TO_CFS"]
+#: million US gallons per day -> cfs.
+MGD_TO_CFS: float = 1e6 / (GALLONS_PER_FT3 * 86400.0)
+
+#: cfs sustained for one hour -> million US gallons.
+CFS_H_TO_MG: float = GALLONS_PER_FT3 * 3600 / 1e6
+
+__all__ = ["ACRE_INCH_TO_FT3", "IN_AC_PER_HR_TO_CFS", "MM_AC_PER_HR_TO_CFS", "GALLONS_PER_FT3",
+           "MGD_TO_CFS", "CFS_H_TO_MG"]

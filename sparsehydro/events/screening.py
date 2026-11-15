@@ -48,7 +48,8 @@ import pandas as pd
 from scipy.signal import find_peaks
 
 from ..filters import FilterResult
-from . import EventRecord, detect_events, events_to_dataframe
+from .detection import detect_events
+from .records import EventRecord, events_to_dataframe
 
 # Categorisation labels attached to every candidate EventRecord.
 _QUALIFYING = "qualifying"

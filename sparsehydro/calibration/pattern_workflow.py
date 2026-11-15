@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from sparsehydro.configuration import CalibrationSettings, ModelSettings, ParameterSettings, StudySettings
-from sparsehydro.events.imported import imported_event_inventory, prepare_hybrid_events
+from sparsehydro.events.io import imported_event_inventory, prepare_hybrid_events
 from sparsehydro.models.rdii.initial_abstraction import snow_partition
 from sparsehydro.models.abstraction.soil_groundwater import HAS_NUMBA as _HAS_NUMBA, soil_groundwater_core as _gwi_B_core
 from sparsehydro.models.wholeflow_pattern import (
