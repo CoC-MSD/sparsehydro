@@ -336,8 +336,7 @@ def test_bounded_snow_solver_is_thread_and_holdout_invariant():
         problem = CalibrationProblem(
             model, frame.assign(flow_cfs=frame.flow_cfs.where(train)),
             objectives=[ConcordanceCorrelationCoefficient(mask=storm), NashSutcliffe(mask=train)],
-            column_map={"observed": "flow_cfs", "predicted": lambda values: values},
-            predict_fn=PatternWholeFlowModel.predict_total_cfs,
+            column_map={"observed": "flow_cfs", "predicted": "total_cfs"},
             skip_infeasible=True)
         assert problem.param_names == ["snow_T", "snow_ddf"]
         result = PlatypusSolver(platypus.NSGAII, population_size=12, n_evaluations=48,

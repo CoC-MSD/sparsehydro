@@ -43,7 +43,7 @@ class ThreadCheckedModel(IModel):
         self._state = ModelState.FINALIZED
 
 
-def make_problem(predict_fn=None):
+def make_problem():
     data = pd.DataFrame({"x": np.arange(1, 33, dtype=float)})
     data["observed"] = data.x * 2.5 + .1 * np.sin(data.x)
     model = ThreadCheckedModel()
@@ -51,7 +51,6 @@ def make_problem(predict_fn=None):
     return CalibrationProblem(
         model, data, objectives=[MSE(), NashSutcliffe()],
         column_map={"observed": "observed", "predicted": "prediction"},
-        predict_fn=predict_fn,
     )
 
 
@@ -72,7 +71,7 @@ def assert_equal_results(left, right):
 
 @pytest.mark.parametrize("workers", [2, 4])
 @pytest.mark.parametrize("seed", [7, 42])
-def test_ordered_workers_preserve_history_callbacks_and_original_model(workers, seed):
+def test_ordered_workers_preserve_history_callbacks_and_original_model(workers, seed, monkeypatch):
     problem = make_problem()
     serial_callbacks, parallel_callbacks = [], []
     serial = PlatypusSolver(
@@ -82,13 +81,15 @@ def test_ordered_workers_preserve_history_callbacks_and_original_model(workers, 
     barrier = threading.Barrier(workers, timeout=10)
     seen = {}
 
+    original_predict = ThreadCheckedModel.predict
+
     def predict(model):
         if model.owner is None:
             seen[threading.get_ident()] = (model, threading.current_thread())
             barrier.wait()
-        return model.predict()
+        return original_predict(model)
 
-    problem._predict_fn = predict
+    monkeypatch.setattr(ThreadCheckedModel, "predict", predict)
     main_thread = threading.get_ident()
 
     def callback(event):
@@ -113,14 +114,16 @@ def test_ordered_workers_preserve_history_callbacks_and_original_model(workers, 
         assert left == right
 
 
-def test_per_call_worker_override_preserves_serial_path():
+def test_per_call_worker_override_preserves_serial_path(monkeypatch):
     threads = []
+    original_predict = ThreadCheckedModel.predict
 
     def predict(model):
         threads.append(threading.current_thread())
-        return model.predict()
+        return original_predict(model)
 
-    problem = make_problem(predict)
+    monkeypatch.setattr(ThreadCheckedModel, "predict", predict)
+    problem = make_problem()
     solver = PlatypusSolver(platypus.NSGAII, population_size=8,
                             n_evaluations=16, n_workers=4)
     solver.solve(problem, n_workers=1)
@@ -174,16 +177,19 @@ def test_custom_evaluator_is_preserved_serially_but_rejected_with_threads():
 
 
 @pytest.mark.parametrize("failure", ["prediction", "callback"])
-def test_errors_propagate_and_worker_threads_are_joined(failure):
+def test_errors_propagate_and_worker_threads_are_joined(failure, monkeypatch):
     threads = set()
     lock = threading.Lock()
+    original_predict = ThreadCheckedModel.predict
 
     def predict(model):
         with lock:
             threads.add(threading.current_thread())
         if failure == "prediction":
             raise ArithmeticError("Injected prediction failure")
-        return model.predict()
+        return original_predict(model)
+
+    monkeypatch.setattr(ThreadCheckedModel, "predict", predict)
 
     def callback(event):
         raise ArithmeticError("Injected callback failure")
@@ -192,5 +198,5 @@ def test_errors_propagate_and_worker_threads_are_joined(failure):
         PlatypusSolver(
             platypus.NSGAII, population_size=8, n_evaluations=16, n_workers=4,
             callback=callback,
-        ).solve(make_problem(predict))
+        ).solve(make_problem())
     assert threads and all(not thread.is_alive() for thread in threads)

@@ -281,8 +281,7 @@ def test_each_solver_executes_a_configured_core_model(method, n_triangles):
     train = np.ones(len(data), bool)
     problem = CalibrationProblem(
         model, data, config.build_objectives(train, train),
-        column_map={"observed": "flow_cfs", "predicted": lambda values: values},
-        predict_fn=PatternWholeFlowModel.predict_total_cfs,
+        column_map={"observed": "flow_cfs", "predicted": "total_cfs"},
         skip_infeasible=True)
     result = config.build_solver().solve(problem)
     assert problem.n_params == 2

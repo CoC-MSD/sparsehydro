@@ -251,18 +251,25 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
               }))
     full_calls, lean_calls = [], []
     full_predict = PatternWholeFlowModel.predict
+    array_predict = PatternWholeFlowModel.predict_arrays
     lean_predict = PatternWholeFlowModel.predict_total_cfs
+    in_full = set()
 
     def predict(model):
         full_calls.append(model)
-        return full_predict(model)
+        in_full.add(id(model))
+        try:
+            return full_predict(model)
+        finally:
+            in_full.discard(id(model))
 
-    def predict_total(model):
-        lean_calls.append(model)
-        return lean_predict(model)
+    def predict_arrays(model):
+        if id(model) not in in_full:
+            lean_calls.append(model)
+        return array_predict(model)
 
     monkeypatch.setattr(PatternWholeFlowModel, "predict", predict)
-    monkeypatch.setattr(PatternWholeFlowModel, "predict_total_cfs", predict_total)
+    monkeypatch.setattr(PatternWholeFlowModel, "predict_arrays", predict_arrays)
     calibrate_state(ns)
     if scoring_mode == "multiobjective":
         assert ns["CALIBRATION_WORKERS"] == ns["solver2"].n_workers == 4

@@ -500,8 +500,7 @@ def calibrate_pattern_model(
     observed = data["flow_cfs"].to_numpy()
     problem = CalibrationProblem(
         model=model, data=data.assign(flow_cfs=data["flow_cfs"].where(train)), objectives=objectives,
-        column_map={"observed": "flow_cfs", "predicted": lambda values: values},
-        predict_fn=PatternWholeFlowModel.predict_total_cfs,
+        column_map={"observed": "flow_cfs", "predicted": "total_cfs"},
         skip_infeasible=True)
     solver = config.build_solver()
     metadata = config.solver_metadata()

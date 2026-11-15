@@ -165,10 +165,6 @@ class CalibrationProblem:
         carry their own ``mask`` override this default.  Positions where
         observed or predicted is ``NaN`` are always excluded regardless.
     :type mask: str or Callable or numpy.ndarray or None
-    :param predict_fn: Optional prediction callback receiving the current worker
-        model. Pair array results with an appropriate predicted extractor.
-        When unset, the existing array-prediction fast path is unchanged.
-    :type predict_fn: Callable or None
     :param skip_infeasible: When ``True``, a parameter vector that violates any
         of the model's inequality constraints is not run: every objective gets
         ``penalty_weight * (1 + sum(max(0, g)**2))`` instead. Use it for models
@@ -197,14 +193,11 @@ class CalibrationProblem:
         prepare_fn: Callable | None = None,
         mask: "str | Callable | np.ndarray | None" = None,
         *,
-        predict_fn: Callable[[Any], Any] | None = None,
         skip_infeasible: bool = False,
         **prepare_kwargs: Any,
     ) -> None:
         if objectives is None or len(objectives) == 0:
             raise ValueError("At least one objective is required.")
-        if predict_fn is not None and not callable(predict_fn):
-            raise TypeError("predict_fn must be callable or None.")
 
         cmap = column_map or {}
         rename_entries = {k: v for k, v in cmap.items() if k not in _ROLE_KEYS}
@@ -219,7 +212,6 @@ class CalibrationProblem:
         self._objectives = list(objectives)
         self._column_map = cmap
         self._prepare_fn = prepare_fn
-        self._predict_fn = predict_fn
         self._skip_infeasible = bool(skip_infeasible)
         self._prepare_kwargs = prepare_kwargs
 
@@ -570,9 +562,7 @@ class CalibrationProblem:
         """
         self._apply(x)
 
-        if self._predict_fn is not None:
-            predicted = np.asarray(self._result_extractor(self._predict_fn(self._model)), dtype=float)
-        elif self._predicted_key is not None:
+        if self._predicted_key is not None:
             arrays = self._model.predict_arrays()
             predicted = np.asarray(arrays[self._predicted_key], dtype=float)
         else:

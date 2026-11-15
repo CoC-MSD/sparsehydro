@@ -148,23 +148,23 @@ def problem_for(model, data, lean):
         model, data.assign(flow_cfs=data.flow_cfs.where(train)),
         objectives=[ConcordanceCorrelationCoefficient(mask=storm),
                     NashSutcliffe(mask=train)],
-        column_map={"observed": "flow_cfs",
-                    "predicted": (lambda values: values) if lean else "total_cfs"},
-        predict_fn=CompactWholeFlowModel.predict_total_cfs if lean else None,
+        column_map={"observed": "flow_cfs", "predicted": "total_cfs"},
         skip_infeasible=True
     )
 
 
-def test_lean_callback_receives_worker_and_preserves_penalties(make_model, monkeypatch):
+def test_calibration_runs_the_worker_model_and_preserves_penalties(make_model, monkeypatch):
     model = make_model()
     problem = problem_for(model, forcing(), lean=True)
     seen = []
+    cls = type(model)
+    arrays = cls.predict_arrays
 
-    def predict(worker):
+    def predict_arrays(worker):
         seen.append(worker)
-        return worker.predict_total_cfs()
+        return arrays(worker)
 
-    problem._predict_fn = predict
+    monkeypatch.setattr(cls, "predict_arrays", predict_arrays)
     worker = problem.make_copy()
     assert isinstance(worker, CalibrationProblem) and worker._skip_infeasible
     assert worker._model is not model
@@ -174,7 +174,7 @@ def test_lean_callback_receives_worker_and_preserves_penalties(make_model, monke
     def full_not_allowed(*args, **kwargs):
         raise AssertionError("Lean calibration must not call full predict")
 
-    monkeypatch.setattr(CompactWholeFlowModel, "predict", full_not_allowed)
+    monkeypatch.setattr(cls, "predict", full_not_allowed)
     assert np.isfinite(worker.evaluate(x)).all()
     assert len(seen) == 1 and seen[0] is worker._model
     assert model.get_scalar_parameter("area_acres").value == 20.26
@@ -186,14 +186,14 @@ def test_lean_callback_receives_worker_and_preserves_penalties(make_model, monke
     assert len(seen) == 1
 
 
-def test_prediction_callback_errors_are_not_swallowed(make_model):
+def test_prediction_errors_are_not_swallowed(make_model, monkeypatch):
     problem = problem_for(make_model(), forcing(), lean=True)
     x = np.array([problem._model.get_scalar_parameter(n).value for n in problem.param_names])
 
     def fail(worker):
         raise ArithmeticError("Injected prediction failure")
 
-    problem._predict_fn = fail
+    monkeypatch.setattr(type(problem._model), "predict_arrays", fail)
     with pytest.raises(ArithmeticError, match="Injected prediction failure"):
         problem.evaluate(x)
     with pytest.raises(ArithmeticError, match="Injected prediction failure"):

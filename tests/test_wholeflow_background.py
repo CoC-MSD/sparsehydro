@@ -348,8 +348,7 @@ def test_joint_calibration_cannot_move_frozen_background():
     original = model.observed_background
     problem = CalibrationProblem(
         model, frame.assign(flow_cfs=frame.flow_cfs.where(train)), [NashSutcliffe(mask=train)],
-        column_map={"observed": "flow_cfs", "predicted": lambda values: values},
-        predict_fn=PatternWholeFlowModel.predict_total_cfs,
+        column_map={"observed": "flow_cfs", "predicted": "total_cfs"},
         skip_infeasible=True)
     result = ScipySolver(method="L-BFGS-B", maxiter=20).solve(problem)
     assert result.param_names == ["sanitary_hour_scale"]
