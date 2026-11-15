@@ -39,7 +39,6 @@ Optional degree-day snow model (``snow=True``)::
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -54,6 +53,9 @@ from ...registry import registry
 # the pure-Python reference below runs unchanged.  ``fastmath`` is kept OFF so the
 # compiled exp/log stay bit-identical to the reference.
 from ..._numba import HAS_NUMBA as _HAS_NUMBA, njit
+from ..forcing.snow import (  # noqa: F401 - re-exported
+    SnowConfig, _snow_partition_core, snow_partition, snow_step, snow_step_nb,
+)
 
 
 
@@ -114,13 +116,7 @@ def _compute_excess_core_nb(rainfall_mm, dt_hours, temperature, use_temp,
         dt = dt_hours[i]
         T = temperature[i] if use_temp else T_ref
         if snow_on:
-            if T <= snow_T:
-                swe += P
-                P = 0.0
-            elif swe > 0.0:
-                melt = min(swe, snow_ddf * (T - snow_T) * dt / 24.0)
-                swe -= melt
-                P += melt
+            swe, P, _snowfall, _melt = snow_step_nb(P, T, dt, swe, snow_T, snow_ddf)
         if P <= 0.0:
             if T >= T_freeze:
                 k_rec = k0 + kT * math.exp(theta * (T - T_ref))
@@ -592,13 +588,7 @@ class IAModel(IModel):
             T = float(temperature[i]) if use_temp else T_ref
 
             if snow_on:
-                if T <= snow_T:
-                    swe += P
-                    P = 0.0
-                elif swe > 0.0:
-                    melt = min(swe, snow_ddf * (T - snow_T) * dt / 24.0)
-                    swe -= melt
-                    P += melt
+                swe, P, _snowfall, _melt = snow_step(P, T, dt, swe, snow_T, snow_ddf)
 
             if P <= 0.0:
                 if T >= T_freeze:
@@ -637,79 +627,7 @@ class IAModel(IModel):
             self.snow_ddf = self.get_scalar_parameter("snow_ddf").value
 
 
-def _snow_step(precipitation, temperature, dt_hours, swe, snow_T, snow_ddf):
-    """Partition water once, before either IA implementation receives it."""
-    snowfall = 0.0
-    melt = 0.0
-    if temperature <= snow_T:
-        snowfall = precipitation
-        swe += precipitation
-        liquid = 0.0
-    else:
-        if swe > 0.0:
-            melt = min(swe, snow_ddf * (temperature - snow_T) * dt_hours / 24.0)
-            swe -= melt
-        liquid = precipitation + melt
-    return swe, liquid, snowfall, melt
-
-
-_snow_step_nb = njit(cache=True, fastmath=False)(_snow_step)
-
-
-@dataclass(frozen=True)
-class SnowConfig:
-    """Immutable imperial degree-day settings; SWE is water, not snow depth."""
-
-    threshold_c: float = 1.0
-    melt_factor_in_per_c_day: float = 0.12
-    initial_swe_in: float = 0.0
-
-    def __post_init__(self) -> None:
-        if (not np.isfinite(self.threshold_c)
-                or not np.isfinite(self.melt_factor_in_per_c_day)
-                or self.melt_factor_in_per_c_day < 0
-                or not np.isfinite(self.initial_swe_in) or self.initial_swe_in < 0):
-            raise ValueError("Snow settings must be finite; melt factor and initial SWE nonnegative")
-
-
-@njit(cache=True, fastmath=False, nogil=True)
-def _snow_partition_core(precipitation, temperature, dt_hours, threshold, factor, initial):
-    n = len(precipitation)
-    swe = np.zeros(n)
-    liquid = np.zeros(n)
-    snowfall = np.zeros(n)
-    melt = np.zeros(n)
-    storage = initial
-    for i in range(n):
-        storage, liquid[i], snowfall[i], melt[i] = _snow_step_nb(
-            precipitation[i], temperature[i], dt_hours, storage, threshold, factor)
-        swe[i] = storage
-    return swe, liquid, snowfall, melt
-
-
-def snow_partition(
-    precipitation_in: np.ndarray, temperature_c: np.ndarray, dt_hours: float,
-    config: SnowConfig | None = None,
-) -> pd.DataFrame:
-    """Deterministic forcing-only snow ledger; ``None`` passes precipitation through.
-
-    Run on the full forcing record including warmup, never separately by split.
-    ``rainfall_in`` at the caller remains measured total precipitation; only
-    ``liquid_input_in`` may enter the soil/GWI/RTK physics.
-    """
-    rain = np.ascontiguousarray(precipitation_in, dtype=float)
-    temp = np.ascontiguousarray(temperature_c, dtype=float)
-    if (rain.ndim != 1 or rain.size == 0 or temp.shape != rain.shape
-            or not np.isfinite(rain).all() or (rain < 0).any()
-            or not np.isfinite(temp).all() or not np.isfinite(dt_hours) or dt_hours <= 0):
-        raise ValueError("Snow forcing must be aligned finite vectors, nonnegative rain, positive timestep")
-    if config is None:
-        swe, liquid, snowfall, melt = np.zeros_like(rain), rain.copy(), np.zeros_like(rain), np.zeros_like(rain)
-    else:
-        swe, liquid, snowfall, melt = _snow_partition_core(
-            rain, temp, dt_hours, config.threshold_c,
-            config.melt_factor_in_per_c_day, config.initial_swe_in)
-    return pd.DataFrame({
-        "snowfall_in": snowfall, "rain_liquid_in": rain - snowfall,
-        "melt_in": melt, "liquid_input_in": liquid, "SWE_in": swe,
-    })
+# Snow lives in sparsehydro.models.forcing.snow; these names are kept for
+# existing imports.
+_snow_step = snow_step
+_snow_step_nb = snow_step_nb
