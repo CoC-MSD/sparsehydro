@@ -159,6 +159,7 @@ class RDIIModel(IModel):
         :returns: Nothing.
         :rtype: None
         """
+        self._reset_registries()
         self._ia_model.initialize()
         for uh in self._uh_components:
             uh.initialize()

@@ -119,6 +119,17 @@ class IModel(ABC):
         self._constraint_registry: list[ConstraintRecord] = []
         self._output_fields: dict[str, FieldRecord] = {}
 
+    def _reset_registries(self) -> None:
+        """Clear registered parameters, outputs and constraints.
+
+        Call at the start of :meth:`initialize` so that initializing twice
+        re-registers everything once instead of appending duplicates.
+        """
+        self._scalar_parameters = {}
+        self._vector_parameters = {}
+        self._constraint_registry = []
+        self._output_fields = {}
+
     # ------------------------------------------------------------------
     # State queries
     # ------------------------------------------------------------------

@@ -109,10 +109,7 @@ class AbstractionUHModel(IModel):
         :returns: Nothing.
         :rtype: None
         """
-        self._scalar_parameters = {}
-        self._vector_parameters = {}
-        self._constraint_registry = []
-        self._output_fields = {}
+        self._reset_registries()
         self._param_map = {}
 
         self._children = [(self._abstraction, ""), (self._uh, "uh_")]

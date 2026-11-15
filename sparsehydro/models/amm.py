@@ -279,6 +279,7 @@ class AMMModel(IModel):
 
     def initialize(self) -> None:
         """Register parameters, output fields, and constraints."""
+        self._reset_registries()
         self.register_scalar_parameter(ScalarParameter(
             "area_acres", value=self._seed_area, lower_bound=0.01, upper_bound=100_000.0,
             units="acres", description="Catchment area — converts capture depth to flow (CFS)",

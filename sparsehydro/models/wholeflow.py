@@ -273,6 +273,7 @@ class WholeFlowModel(IModel):
 
     def initialize(self):
         # --- GWI / IA store parameters (identical to GwiStoreModelB) ----------
+        self._reset_registries()
         self.register_scalar_parameter(ScalarParameter(
             "s_max", value=0.5, lower_bound=0.05, upper_bound=1.0,
             units="in", description="IA store S capacity"))
@@ -473,6 +474,7 @@ class GwiStoreModelB(IModel):
         self._temp = None
 
     def initialize(self):
+        self._reset_registries()
         self.register_scalar_parameter(ScalarParameter(
             "s_max", value=0.5, lower_bound=0.05, upper_bound=self._s_max_upper,
             units="in", description="IA store S capacity"))
@@ -610,6 +612,7 @@ class RTKOnFrozenExcess(IModel):
         self._dtcol = None
 
     def initialize(self):
+        self._reset_registries()
         for t in self._tri:
             t.initialize()
         for i, (R, T, K) in enumerate(self._init, 1):

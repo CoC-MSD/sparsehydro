@@ -146,6 +146,7 @@ class EnsembleModel(IModel):
 
     def initialize(self) -> None:
         """Register weight + child parameters, surface child constraints."""
+        self._reset_registries()
         n = len(self._children)
 
         for child in self._children:
