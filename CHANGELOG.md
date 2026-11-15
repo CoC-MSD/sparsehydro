@@ -96,11 +96,15 @@ also contains the changes noted as 1.0.0a2, which was never tagged.
 
 - The version is defined once, in `sparsehydro/__init__.py` (`pyproject.toml`
   reads it), and the package is classified as beta.
+- Beta deprecation policy (`CONTRIBUTING.md`): public names are not removed
+  or renamed without a `DeprecationWarning` period.
+- Releases publish to PyPI through trusted publishing after the full test
+  matrix, a tag/version/changelog check, `twine check` and a wheel install;
+  optional TestPyPI rehearsal. Setup and steps are in `RELEASING.md`.
 - Expanded calibration objectives and solver support for weighted and
   multi-objective workflows.
 - Improved time-series parsing and plotting performance for large monitoring
   datasets.
-
 - **BREAKING:** modules regrouped so each package has one job and imports
   only from the layers below it. Names exported from a package's
   `__init__` (for example `from sparsehydro.calibration import NashSutcliffe`,

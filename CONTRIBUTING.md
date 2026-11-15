@@ -270,11 +270,21 @@ happen.
 
 ## 14. Versioning and deprecation
 
-sparsehydro uses [Semantic Versioning](https://semver.org/). While the version
-is below 1.0.0 or carries a pre-release tag, minor releases may contain
-breaking changes; they are always listed in the changelog. When an interface
-is going to be removed, it is first deprecated with a `DeprecationWarning` for
-at least one release where practical.
+sparsehydro uses [Semantic Versioning](https://semver.org/). Breaking changes
+are always listed in the changelog and marked **BREAKING**.
+
+- **Alpha** (`1.0.0aN`): anything may change between releases.
+- **Beta** (`1.0.0bN`, the current stage): the public API is complete. A
+  public name (anything exported from a package `__init__`, a registered model,
+  objective or solver name, a parameter name) is not removed or renamed
+  without first keeping the old spelling working with a `DeprecationWarning`
+  for at least one beta release. Changes are made only for problems found
+  during the beta.
+- **1.0.0 and later**: breaking changes only in a new major version, after a
+  deprecation period in the previous minor releases.
+
+How releases are cut and published is described in
+[RELEASING.md](RELEASING.md).
 
 ## 15. Security issues
 

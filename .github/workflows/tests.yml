@@ -5,6 +5,7 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  workflow_call:  # reused by publish.yml before every release
 
 jobs:
   hygiene:
