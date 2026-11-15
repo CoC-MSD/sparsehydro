@@ -3,14 +3,14 @@
 ``total_cfs = sanitary + GWI + RDII``. A whole-flow model is a
 :class:`~sparsehydro.models.composite.CompositeModel` of registered components:
 
-=============  ==========================================  ======================
-Component      Class                                       Provides
-=============  ==========================================  ======================
-``snow``       :class:`~sparsehydro.models.forcing.DegreeDaySnow`  liquid input, SWE
-``store``      :class:`~sparsehydro.models.abstraction.SoilGroundwaterStore`  excess, GWI
-``rdii``       :class:`~sparsehydro.models.rdii.RDIIModel` with RTK triangles  RDII
-``baseline``   a sanitary baseline component               sanitary flow
-=============  ==========================================  ======================
+``snow``
+    :class:`~sparsehydro.models.forcing.DegreeDaySnow`: liquid input, SWE.
+``store``
+    :class:`~sparsehydro.models.abstraction.SoilGroundwaterStore`: excess, GWI.
+``rdii``
+    :class:`~sparsehydro.models.rdii.RDIIModel` with RTK triangles: RDII.
+``baseline``
+    A sanitary baseline component: sanitary flow.
 
 :class:`CompactWholeFlowModel` uses a fixed sanitary template;
 :class:`PatternWholeFlowModel` uses

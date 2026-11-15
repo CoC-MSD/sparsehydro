@@ -728,12 +728,12 @@ RDII-Specific Plots
 These functions require ``sparsehydro[rdii]``.
 
 **plot_rtk_shape** — unit hydrograph shape for each
-:class:`~sparsehydro.rdii.rtk_triangle.RTKTriangle`, useful for
+:class:`~sparsehydro.models.rdii.rtk_triangle.RTKTriangle`, useful for
 sanity-checking T (time-to-peak) and K (recession ratio) before calibration:
 
 .. code-block:: python
 
-   from sparsehydro.rdii import RTKTriangle
+   from sparsehydro.models.rdii import RTKTriangle
    from sparsehydro.visualization import plot_rtk_shape
 
    tri1 = RTKTriangle(R=0.05, T=1.0, K=2.0)
@@ -747,7 +747,7 @@ sanity-checking T (time-to-peak) and K (recession ratio) before calibration:
 **plot_rdii_components** — stacked area chart of per-triangle RDII
 contributions alongside rainfall.  The input DataFrame must contain
 ``rdii_component_N`` columns (produced by
-:class:`~sparsehydro.rdii.model.RDIIModel`):
+:class:`~sparsehydro.models.rdii.model.RDIIModel`):
 
 .. code-block:: python
 
@@ -792,9 +792,9 @@ Opening ``dashboard.html`` in any browser shows all panels:
 VisualizationModel
 ~~~~~~~~~~~~~~~~~~
 
-:class:`~sparsehydro.visualization.timeseries.VisualizationModel` wraps the
+:class:`~sparsehydro.visualization.model.VisualizationModel` wraps the
 three core plot functions behind the standard
-:class:`~sparsehydro.interfaces.IModel` lifecycle so a visualization step can
+:class:`~sparsehydro.models.base.IModel` lifecycle so a visualization step can
 be composed into any pipeline:
 
 .. code-block:: python
@@ -825,7 +825,7 @@ be composed into any pipeline:
 RDII Modelling
 --------------
 
-The :mod:`sparsehydro.rdii` subpackage provides a physics-based RDII model
+The :mod:`sparsehydro.models.rdii` subpackage provides a physics-based RDII model
 that combines temperature-driven **initial abstraction** recovery with
 triangular **RTK unit hydrographs**.
 
@@ -839,7 +839,7 @@ Quick RDII calibration
 .. code-block:: python
 
    import pandas as pd
-   from sparsehydro.rdii import RDIIModel
+   from sparsehydro.models.rdii import RDIIModel
    from sparsehydro.calibration import (
        CalibrationProblem, NSGAIISolver, PeakWeightedMSE, NashSutcliffe,
    )
@@ -872,8 +872,8 @@ Quick RDII calibration
    plot_pareto_evolution(result).show()
 
 See the :ref:`API Reference <api-reference>` for complete documentation of
-:class:`~sparsehydro.rdii.model.RDIIModel`,
-:class:`~sparsehydro.rdii.initial_abstraction.IAModel`,
-:class:`~sparsehydro.rdii.rtk_triangle.RTKTriangle`,
+:class:`~sparsehydro.models.rdii.model.RDIIModel`,
+:class:`~sparsehydro.models.rdii.initial_abstraction.IAModel`,
+:class:`~sparsehydro.models.rdii.rtk_triangle.RTKTriangle`,
 :class:`~sparsehydro.calibration.problem.CalibrationProblem`, and
 :class:`~sparsehydro.calibration.solvers.nsga2.NSGAIISolver`.

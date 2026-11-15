@@ -9,7 +9,8 @@ Two complementary strategies:
   or validation, stratified by magnitude and season, with warmup and recession
   buffers around validation storms (:func:`stratified_event_split`).
 
-:mod:`.metrics` scores a prediction event by event (:func:`per_event_scores`).
+:mod:`.masks` builds scoring masks (dry weather, storms, snow melt).
+Per-event scoring lives in :mod:`sparsehydro.metrics.events` and is re-exported here.
 """
 
 from __future__ import annotations

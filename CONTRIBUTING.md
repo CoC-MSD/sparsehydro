@@ -15,14 +15,15 @@ By taking part you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 4. [Development setup](#4-development-setup)
 5. [Repository rules](#5-repository-rules)
 6. [Branches](#6-branches)
-7. [Adding a model formulation](#7-adding-a-model-formulation)
-8. [Tests](#8-tests)
-9. [Code style](#9-code-style)
-10. [Documentation and changelog](#10-documentation-and-changelog)
-11. [Pull requests](#11-pull-requests)
-12. [Reporting bugs and requesting features](#12-reporting-bugs-and-requesting-features)
-13. [Versioning and deprecation](#13-versioning-and-deprecation)
-14. [Security issues](#14-security-issues)
+7. [Where code goes](#7-where-code-goes)
+8. [Adding a model formulation](#8-adding-a-model-formulation)
+9. [Tests](#9-tests)
+10. [Code style](#10-code-style)
+11. [Documentation and changelog](#11-documentation-and-changelog)
+12. [Pull requests](#12-pull-requests)
+13. [Reporting bugs and requesting features](#13-reporting-bugs-and-requesting-features)
+14. [Versioning and deprecation](#14-versioning-and-deprecation)
+15. [Security issues](#15-security-issues)
 
 ## 1. What sparsehydro is for
 
@@ -121,7 +122,39 @@ Keep each branch focused on one change. A pull request that adds a
 formulation, refactors calibration and updates an unrelated study is hard to
 review; split it.
 
-## 7. Adding a model formulation
+## 7. Where code goes
+
+Each package has one job and may import only from its own layer or the layers
+below it. `tests/test_layering.py` fails if a change breaks this.
+
+| Layer | Package | Put here |
+|---|---|---|
+| 0 | `enums`, `parameters`, `registry`, `units` | Core types, the model registry, unit constants. |
+| 1 | `metrics` | Goodness-of-fit functions (`metrics.functions`) and calibration objectives (`metrics.objectives`). Every formula lives here once. |
+| 1 | `filters` | Signal filtering (Savitzky-Golay, dry-weather patterns). |
+| 1 | `data`, `sample_data` | File IO, assembling a modelling table, data service clients, the bundled sample. |
+| 2 | `events` | Event detection, screening, records and event file IO. |
+| 3 | `models` | `IModel`, components, `CompositeModel` and presets. Never imports calibration or events. |
+| 4 | `calibration` | Problems, results, solvers, splits and scoring masks, Pareto selection, sequential fitting. |
+| 5 | `configuration` | Building models, objectives and solvers from plain data. |
+| 6 | `visualization` | Plotly figures. |
+| 7 | `viewer`, `studies` | Applications and study-specific workflows. |
+
+Rules of thumb:
+
+- **A new metric** is a function in `metrics/functions.py`; wrap it in an
+  objective class in `metrics/objectives.py` only if it is used for
+  calibration. Plots and reports call the function; they do not re-derive it.
+- **Code for one project or client** goes in `sparsehydro/studies/<study>/`.
+  Nothing outside `studies` may import from it. If study code turns out to be
+  generally useful, move it down into the right layer (without study names or
+  defaults) and import it from the study.
+- **`__init__.py` files only re-export.** Write functions and classes in a
+  module and import them in the package `__init__`.
+- **Import at the top of the module.** A function-local import to dodge an
+  import cycle means the code is in the wrong layer.
+
+## 8. Adding a model formulation
 
 Every formulation is a subclass of `sparsehydro.IModel` (or of a more specific
 base such as `IUnitHydroComponent`) and follows the same lifecycle:
@@ -171,7 +204,7 @@ timestep invariance, registry round-trip) cover it. See
 [docs/unit_hydrographs.md](docs/unit_hydrographs.md#adding-a-formulation) for a
 worked example.
 
-## 8. Tests
+## 9. Tests
 
 - Every new formulation needs tests for its lifecycle, its outputs on a small
   synthetic case with a known answer (mass balance, unit area, analytical
@@ -191,7 +224,7 @@ Run a single file or test while working:
 pytest tests/test_rdii_model.py -k triangle
 ```
 
-## 9. Code style
+## 10. Code style
 
 - Follow PEP 8 with a line length of about 100 characters.
 - Add type hints to public functions and methods.
@@ -200,7 +233,7 @@ pytest tests/test_rdii_model.py -k triangle
 - Prefer clear names and short functions over comments that explain clever
   code.
 
-## 10. Documentation and changelog
+## 11. Documentation and changelog
 
 - Update `docs/` when you add or change public behaviour. New formulations get
   an entry in the API reference with their equations and parameter table.
@@ -208,7 +241,7 @@ pytest tests/test_rdii_model.py -k triangle
   under Added, Changed, Deprecated, Removed or Fixed. Mark breaking changes
   with **BREAKING**.
 
-## 11. Pull requests
+## 12. Pull requests
 
 1. Open the pull request against `dev`.
 2. Fill in the pull request template, including the checklist.
@@ -224,7 +257,7 @@ Reviewers aim to respond within two weeks. If a pull request has had no
 activity from its author for 60 days it may be closed; it can be reopened at
 any time.
 
-## 12. Reporting bugs and requesting features
+## 13. Reporting bugs and requesting features
 
 Use the issue templates on GitHub. For bugs, include the sparsehydro version
 (`python -c "import sparsehydro; print(sparsehydro.__version__)"`), your Python
@@ -232,7 +265,7 @@ version and operating system, a minimal script that reproduces the problem
 (synthetic data or the bundled sample if possible), and what you expected to
 happen.
 
-## 13. Versioning and deprecation
+## 14. Versioning and deprecation
 
 sparsehydro uses [Semantic Versioning](https://semver.org/). While the version
 is below 1.0.0 or carries a pre-release tag, minor releases may contain
@@ -240,7 +273,7 @@ breaking changes; they are always listed in the changelog. When an interface
 is going to be removed, it is first deprecated with a `DeprecationWarning` for
 at least one release where practical.
 
-## 14. Security issues
+## 15. Security issues
 
 Do not open a public issue for a security problem. Email the project lead at
 [cbuahin@hazenandsawyer.com](mailto:cbuahin@hazenandsawyer.com) with details,

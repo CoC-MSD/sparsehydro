@@ -27,19 +27,56 @@ import paths mirror the package structure:
    )
 
    # Everything else via its parent sub-package
-   from sparsehydro.models import AMMModel, EnsembleModel, SeasonalityModel
-   from sparsehydro.models.rdii import RDIIModel, IAModel, RTKTriangle
-   from sparsehydro.models.unithydrograph import (
-       GammaUH, NashUH, TriangleUH, SequentialFitter, SequentialFitSummary,
-   )
+   from sparsehydro.metrics import nash_sutcliffe, kge, NashSutcliffe, KGE
    from sparsehydro.filters import apply_savgol_filter, compute_thresholds
    from sparsehydro.events import detect_events, events_to_dataframe
+   from sparsehydro.models import CompositeModel, EnsembleModel, SeasonalityModel
+   from sparsehydro.models.rdii import RDIIModel, IAModel, RTKTriangle
+   from sparsehydro.models.unithydrograph import GammaUH, NashUH, TriangleUH
    from sparsehydro.calibration import (
-       CalibrationProblem, CalibrationResult,
-       MSE, RMSE, NashSutcliffe, KGE, PeakWeightedMSE,
+       CalibrationProblem, CalibrationResult, SequentialFitter,
        NSGAIISolver, ScipySolver, PlatypusSolver, ParticleSwarmSolver,
    )
+   from sparsehydro.configuration import build_model, build_objectives, build_solver
    from sparsehydro.visualization import plot_timeseries, plot_calibration_dashboard
+
+Package layers
+~~~~~~~~~~~~~~
+
+Each package imports only from its own layer or the layers below it (enforced
+by ``tests/test_layering.py``):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 35 55
+
+   * - Layer
+     - Package
+     - Contents
+   * - 0
+     - core modules
+     - ``enums``, ``parameters``, ``registry``, ``units``
+   * - 1
+     - ``metrics``, ``filters``, ``data``, ``sample_data``
+     - metric functions and objectives; signal filters; file IO and data services
+   * - 2
+     - ``events``
+     - storm event detection, screening and records
+   * - 3
+     - ``models``
+     - model interface, components, composition and presets
+   * - 4
+     - ``calibration``
+     - problems, solvers, splits, selection and sequential fitting
+   * - 5
+     - ``configuration``
+     - building models, objectives and solvers from plain dicts
+   * - 6
+     - ``visualization``
+     - Plotly figures
+   * - 7
+     - ``viewer``, ``studies``
+     - applications and study-specific workflows (nothing imports ``studies``)
 
 .. automodule:: sparsehydro
    :members:
@@ -106,91 +143,74 @@ PyTorch Interface
    :members:
    :show-inheritance:
 
+Units
+~~~~~
+
+.. automodule:: sparsehydro.units
+   :members:
+   :show-inheritance:
+
+
 ----
 
-Visualization
--------------
+Metrics
+-------
 
-The :mod:`sparsehydro.visualization` package provides interactive, browser-ready
-Plotly charts for time-series diagnostics, calibration result exploration, and
-RDII component analysis.  All functions require the optional ``plotly`` dependency:
+:mod:`sparsehydro.metrics` holds every goodness-of-fit formula exactly once.
+Plain functions take observed and simulated arrays; the objective classes wrap
+them for calibration (with a direction, an optional mask and a registry name).
 
-.. code-block:: bash
+.. code-block:: python
 
-   pip install plotly
+   from sparsehydro.metrics import nash_sutcliffe, pbias, kge, fit_summary
 
-All public names are importable directly from :mod:`sparsehydro.visualization`
-or from the top-level :mod:`sparsehydro` namespace.
+   nse = nash_sutcliffe(observed, simulated)
+   bias = pbias(observed, simulated)        # signed: positive = over-prediction
+   summary = fit_summary(observed, simulated)
 
-.. automodule:: sparsehydro.visualization
-   :members:
-   :show-inheritance:
-   :noindex:
+.. automodule:: sparsehydro.metrics
 
-Time-Series Plots
-~~~~~~~~~~~~~~~~~
+Metric Functions
+~~~~~~~~~~~~~~~~
 
-.. automodule:: sparsehydro.visualization.timeseries
-   :members:
-   :show-inheritance:
-
-Calibration Result Plots
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. automodule:: sparsehydro.visualization.calibration
+.. automodule:: sparsehydro.metrics.functions
    :members:
    :show-inheritance:
 
-RDII-Specific Plots
-~~~~~~~~~~~~~~~~~~~
+Objectives
+~~~~~~~~~~
 
-.. automodule:: sparsehydro.visualization.rdii
++-------------------------------+---------------------------------------------------+
+| Class                         | Description                                       |
++===============================+===================================================+
+| :class:`MSE`                  | Mean squared error (minimise)                     |
++-------------------------------+---------------------------------------------------+
+| :class:`RMSE`                 | Root mean squared error (minimise)                |
++-------------------------------+---------------------------------------------------+
+| :class:`MAE`                  | Mean absolute error (minimise)                    |
++-------------------------------+---------------------------------------------------+
+| :class:`PeakWeightedMSE`      | Flow-weighted MSE — penalises peak-flow errors    |
++-------------------------------+---------------------------------------------------+
+| :class:`NashSutcliffe`        | Nash-Sutcliffe efficiency (maximise)              |
++-------------------------------+---------------------------------------------------+
+| :class:`KGE`                  | Kling-Gupta efficiency (maximise)                 |
++-------------------------------+---------------------------------------------------+
+| :class:`PBIAS`                | Absolute percent bias (minimise)                  |
++-------------------------------+---------------------------------------------------+
+| :class:`Con15`                | Top-peak regression slope error (minimise)        |
++-------------------------------+---------------------------------------------------+
+
+.. automodule:: sparsehydro.metrics.objectives
    :members:
    :show-inheritance:
 
-Seasonality Plots
-~~~~~~~~~~~~~~~~~
+Per-Event Scores
+~~~~~~~~~~~~~~~~
 
-.. automodule:: sparsehydro.visualization.seasonality
+.. automodule:: sparsehydro.metrics.events
    :members:
    :show-inheritance:
 
-Calibration Dashboard
-~~~~~~~~~~~~~~~~~~~~~
-
-.. automodule:: sparsehydro.visualization.dashboard
-   :members:
-   :show-inheritance:
-
-Unit Hydrograph Plots
-~~~~~~~~~~~~~~~~~~~~~
-
-Six interactive Plotly figures for the sequential UH fitting workflow.
-All functions return :class:`plotly.graph_objects.Figure` and are importable
-directly from :mod:`sparsehydro.visualization` or the top-level namespace.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 40 60
-
-   * - Function
-     - Description
-   * - :func:`plot_rainfall_flow_with_events`
-     - Two-panel timeseries with event shading bands
-   * - :func:`plot_filter_signals`
-     - sg_0 / sg_1 / sg_2 with threshold lines
-   * - :func:`plot_event_detection`
-     - sg_0 + peak markers + event shading
-   * - :func:`plot_sequential_fit`
-     - Rainfall / obs+pred / residual three-row panel
-   * - :func:`plot_parameter_evolution`
-     - Fitted params over time, colored by NSE
-   * - :func:`plot_effective_area`
-     - Bar chart of effective area per event
-
-.. automodule:: sparsehydro.visualization.unithydrograph
-   :members:
-   :show-inheritance:
 
 ----
 
@@ -209,13 +229,19 @@ in a single immutable update step.
 
 .. code-block:: python
 
-   from sparsehydro import apply_savgol_filter, compute_thresholds
+   from sparsehydro.filters import apply_savgol_filter, compute_thresholds
 
    fr = apply_savgol_filter(rain_stormflow_df, window_length=48)
    fr = compute_thresholds(fr, sg_0_per=0.15, sg_1_per=0.25, sg_2_per=0.25)
    print(fr.thresholds)   # {'sg_0_th': ..., 'sg_1_th': ..., 'sg_2_th': ...}
 
-.. automodule:: sparsehydro.filters
+.. automodule:: sparsehydro.filters.savgol
+   :members:
+   :show-inheritance:
+
+Dry-weather patterns:
+
+.. automodule:: sparsehydro.filters.dryweather
    :members:
    :show-inheritance:
 
@@ -233,7 +259,7 @@ to bound each event.  Overlapping events are merged or split at the trough.
 
 .. code-block:: python
 
-   from sparsehydro import detect_events, events_to_dataframe
+   from sparsehydro.events import detect_events, events_to_dataframe
 
    events, filter_result = detect_events(
        rain_stormflow_df,
@@ -243,31 +269,184 @@ to bound each event.  Overlapping events are merged or split at the trough.
    )
    print(events_to_dataframe(events))
 
-.. automodule:: sparsehydro.events
+.. automodule:: sparsehydro.events.detection
+   :members:
+   :show-inheritance:
+
+Event Records
+~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.events.records
+   :members:
+   :show-inheritance:
+
+Importing Events
+~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.events.io
+   :members:
+   :show-inheritance:
+
+Screening
+~~~~~~~~~
+
+Rules that drop, merge or split candidate events (rainfall depth, duration, flow response, inter-event time).
+
+.. automodule:: sparsehydro.events.screening
+   :members:
+   :show-inheritance:
+
+Hierarchical Detection
+~~~~~~~~~~~~~~~~~~~~~~
+
+Variable-window smoothing, peak definition, bimodality tests and event zones combine into :func:`~sparsehydro.events.detect_event_hierarchy`.
+
+.. automodule:: sparsehydro.events.hierarchy
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.events.smoothing
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.events.peaks
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.events.bimodality
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.events.zones
    :members:
    :show-inheritance:
 
 ----
 
-Viewer
+Data
+----
+
+File IO for meter data and TSF files, assembly of a modelling table from
+downloaded inputs, and clients for external data services.
+
+Files
+~~~~~
+
+.. automodule:: sparsehydro.data.utilities
+   :members:
+   :show-inheritance:
+
+Assembly
+~~~~~~~~
+
+.. automodule:: sparsehydro.data.assembly
+   :members:
+   :show-inheritance:
+
+Data Services
+~~~~~~~~~~~~~
+
+Credentials are passed to the client or read from environment variables; never write them into notebooks or source files.
+
+.. automodule:: sparsehydro.data.services.flowfinity
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.data.services.ayyeka
+   :members:
+   :show-inheritance:
+
+Sample Data
+~~~~~~~~~~~
+
+A small bundled dataset for examples and tests:
+
+.. code-block:: python
+
+   from sparsehydro.sample_data import load_sample
+
+   df = load_sample("tc-nb-001")   # datetime, rain [in], stormflow [cfs]
+
+.. automodule:: sparsehydro.sample_data.samples
+   :members:
+   :show-inheritance:
+
+
+----
+
+Models
 ------
 
-Interactive Streamlit app for stepping through
-:func:`~sparsehydro.events.detect_event_hierarchy` +
-:class:`~sparsehydro.models.unithydrograph.GlobalSequentialFitter` results by
-global event (Overview, Smoothing, UH Shape, Convolution).  Install the
-``viewer`` extra and launch it from a shell:
+.. automodule:: sparsehydro.models
 
-.. code-block:: bash
+Composition
+~~~~~~~~~~~
 
-   pip install "sparsehydro[viewer]"
-   sparsehydro-viewer path/to/rain_stormflow.csv
+Formulations are combined declaratively: :class:`~sparsehydro.models.composite.CompositeModel`
+wires registered children together by name (bindings, outputs, shared
+parameters), so a new combination needs configuration, not a new class.
 
-.. automodule:: sparsehydro.viewer.data
+.. automodule:: sparsehydro.models.composite
    :members:
+   :show-inheritance:
 
-.. automodule:: sparsehydro.viewer.cli
+.. automodule:: sparsehydro.models.ensemble
    :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.convolution
+   :members:
+   :show-inheritance:
+
+Seasonality
+~~~~~~~~~~~
+
+.. automodule:: sparsehydro.models.seasonality
+   :members:
+   :show-inheritance:
+
+Abstraction Stores
+~~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.models.abstraction.tank
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.abstraction.soil_groundwater
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.abstraction.external
+   :members:
+   :show-inheritance:
+
+Forcing
+~~~~~~~
+
+.. automodule:: sparsehydro.models.forcing.snow
+   :members:
+   :show-inheritance:
+
+Baseflow
+~~~~~~~~
+
+.. automodule:: sparsehydro.models.baseflow.components
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.models.baseflow.fitting
+   :members:
+   :show-inheritance:
+
+Presets
+~~~~~~~
+
+Ready-made whole-flow compositions of the components above. They are ordinary composites: every parameter remains configurable.
+
+.. automodule:: sparsehydro.models.presets.wholeflow
+   :members:
+   :show-inheritance:
+
 
 ----
 
@@ -316,58 +495,13 @@ equations, the table of formulations and how to add one.
    :members:
    :show-inheritance:
 
+.. automodule:: sparsehydro.models.unithydrograph.kernels
+   :members:
+
 .. automodule:: sparsehydro.models.unithydrograph.rtk
    :members:
    :show-inheritance:
 
-Sequential Fitting
-~~~~~~~~~~~~~~~~~~
-
-:class:`~sparsehydro.calibration.sequential.SequentialFitter` fits a fresh
-model instance to each storm event in chronological order, warm-starting from
-the previous event's calibrated parameters (the first event starts from the
-model's default values).  The predicted flow from each
-fitted event is subtracted from the observed signal before the next event is
-fitted (residual approach).
-
-The ``model_factory`` argument is a zero-argument callable that returns a
-fresh :class:`~sparsehydro.models.IModel` — this works for both single
-UH models and :class:`~sparsehydro.models.EnsembleModel` composites:
-
-.. code-block:: python
-
-   from sparsehydro.calibration import SequentialFitter
-   from sparsehydro.models.unithydrograph import GammaUH
-   from sparsehydro.models import EnsembleModel
-
-   # Single model
-   fitter = SequentialFitter(lambda: GammaUH(), rain_stormflow_df, events)
-
-   # Two-component ensemble
-   def make_ensemble():
-       fast = GammaUH(A=8.0, alpha=2.5, theta=0.25)
-       slow = GammaUH(A=3.0, alpha=4.0, theta=1.7)
-       ens = EnsembleModel(
-           components=[(fast, lambda p: p["Q_pred"].to_numpy()),
-                       (slow, lambda p: p["Q_pred"].to_numpy())],
-           mode="sum", aliases=["fast", "slow"],
-           output_name="Q_pred", normalize_weights=False,
-       )
-       ens.initialize()
-       ens.set_parameter("w_1", value=1.0, calibrate=False)
-       ens.set_parameter("w_2", value=1.0, calibrate=False)
-       ens.validate()
-       return ens
-
-   fitter = SequentialFitter(make_ensemble, rain_stormflow_df, events)
-   summary = fitter.fit(verbose=True)
-
-   print(summary.metrics_summary())        # RMSE, NSE, KGE per event
-   print(summary.parameter_evolution())    # fitted params per event
-
-.. automodule:: sparsehydro.calibration.sequential
-   :members:
-   :show-inheritance:
 
 ----
 
@@ -528,8 +662,7 @@ abstractions for parameter estimation:
   :class:`~sparsehydro.models.IModel` with observed data and objectives.
 * :class:`~sparsehydro.calibration.result.CalibrationResult` — stores the
   Pareto front, per-generation history, and metadata.
-* A library of :class:`~sparsehydro.metrics.objectives.IObjective`
-  implementations covering MSE, NSE, KGE, and more.
+* Objectives from :mod:`sparsehydro.metrics` (re-exported here for convenience).
 * Multiple solver backends (see :ref:`Solvers` below).
 
 .. automodule:: sparsehydro.calibration
@@ -557,26 +690,90 @@ and :meth:`~sparsehydro.calibration.result.CalibrationResult.to_pareto_dataframe
    :members:
    :show-inheritance:
 
-Objectives
-~~~~~~~~~~
+Callbacks
+~~~~~~~~~
 
-+-------------------------------+---------------------------------------------------+
-| Class                         | Description                                       |
-+===============================+===================================================+
-| :class:`MSE`                  | Mean squared error (minimise)                     |
-+-------------------------------+---------------------------------------------------+
-| :class:`RMSE`                 | Root mean squared error (minimise)                |
-+-------------------------------+---------------------------------------------------+
-| :class:`MAE`                  | Mean absolute error (minimise)                    |
-+-------------------------------+---------------------------------------------------+
-| :class:`PeakWeightedMSE`      | Flow-weighted MSE — penalises peak-flow errors    |
-+-------------------------------+---------------------------------------------------+
-| :class:`NashSutcliffe`        | Nash-Sutcliffe efficiency (maximise)              |
-+-------------------------------+---------------------------------------------------+
-| :class:`KGE`                  | Kling-Gupta efficiency (maximise)                 |
-+-------------------------------+---------------------------------------------------+
+.. automodule:: sparsehydro.calibration.callbacks
+   :members:
+   :show-inheritance:
 
-.. automodule:: sparsehydro.metrics.objectives
+Train/Validation Splits
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Time-block and whole-event splits, plus the scoring masks used to weight objectives toward dry weather, storms or snow melt.
+
+.. automodule:: sparsehydro.calibration.splits.blocks
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.calibration.splits.events
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.calibration.splits.masks
+   :members:
+   :show-inheritance:
+
+Selecting Solutions
+~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.calibration.selection
+   :members:
+   :show-inheritance:
+
+Diagnostics
+~~~~~~~~~~~
+
+.. automodule:: sparsehydro.calibration.diagnostics
+   :members:
+   :show-inheritance:
+
+Sequential Fitting
+~~~~~~~~~~~~~~~~~~
+
+:class:`~sparsehydro.calibration.sequential.SequentialFitter` fits a fresh
+model instance to each storm event in chronological order, warm-starting from
+the previous event's calibrated parameters (the first event starts from the
+model's default values).  The predicted flow from each
+fitted event is subtracted from the observed signal before the next event is
+fitted (residual approach).
+
+The ``model_factory`` argument is a zero-argument callable that returns a
+fresh :class:`~sparsehydro.models.IModel` — this works for both single
+UH models and :class:`~sparsehydro.models.EnsembleModel` composites:
+
+.. code-block:: python
+
+   from sparsehydro.calibration import SequentialFitter
+   from sparsehydro.models.unithydrograph import GammaUH
+   from sparsehydro.models import EnsembleModel
+
+   # Single model
+   fitter = SequentialFitter(lambda: GammaUH(), rain_stormflow_df, events)
+
+   # Two-component ensemble
+   def make_ensemble():
+       fast = GammaUH(A=8.0, alpha=2.5, theta=0.25)
+       slow = GammaUH(A=3.0, alpha=4.0, theta=1.7)
+       ens = EnsembleModel(
+           components=[(fast, lambda p: p["Q_pred"].to_numpy()),
+                       (slow, lambda p: p["Q_pred"].to_numpy())],
+           mode="sum", aliases=["fast", "slow"],
+           output_name="Q_pred", normalize_weights=False,
+       )
+       ens.initialize()
+       ens.set_parameter("w_1", value=1.0, calibrate=False)
+       ens.set_parameter("w_2", value=1.0, calibrate=False)
+       ens.validate()
+       return ens
+
+   fitter = SequentialFitter(make_ensemble, rain_stormflow_df, events)
+   summary = fitter.fit(verbose=True)
+
+   print(summary.metrics_summary())        # RMSE, NSE, KGE per event
+   print(summary.parameter_evolution())    # fitted params per event
+
+.. automodule:: sparsehydro.calibration.sequential
    :members:
    :show-inheritance:
 
@@ -683,3 +880,234 @@ Requires ``platypus-opt``:
 See :ref:`Platypus Solver` above — ``ParticleSwarmSolver`` is exported from
 :mod:`sparsehydro.calibration.solvers.platypus_solver` and from the
 top-level :mod:`sparsehydro.calibration` namespace.
+
+CMA-ES Solver
+~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.calibration.solvers.cmaes_solver
+   :members:
+   :show-inheritance:
+
+Solver Registry
+~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.calibration.solvers.registry
+   :members:
+   :show-inheritance:
+
+
+----
+
+Configuration
+-------------
+
+Build any registered model, objective or solver from a plain dictionary (for
+example, loaded from JSON). ``{"type": name, ...}`` nodes are created through
+the registries; nested specs build recursively.
+
+.. code-block:: python
+
+   from sparsehydro.configuration import build_model, build_objectives, build_solver
+
+   model = build_model({"type": "gamma-uh", "A": 5.0})
+   objectives = build_objectives(["nash_sutcliffe", {"type": "pbias"}])
+   solver = build_solver({"type": "nsga2", "pop_size": 40})
+
+.. automodule:: sparsehydro.configuration
+   :members:
+   :show-inheritance:
+
+----
+
+Visualization
+-------------
+
+The :mod:`sparsehydro.visualization` package provides interactive, browser-ready
+Plotly charts for time-series diagnostics, calibration result exploration, and
+RDII component analysis.  All functions require the optional ``plotly`` dependency:
+
+.. code-block:: bash
+
+   pip install plotly
+
+All public names are importable directly from :mod:`sparsehydro.visualization`.
+
+.. automodule:: sparsehydro.visualization
+   :members:
+   :show-inheritance:
+   :noindex:
+
+Time-Series Plots
+~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.timeseries
+   :members:
+   :show-inheritance:
+
+Calibration Result Plots
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.calibration
+   :members:
+   :show-inheritance:
+
+RDII-Specific Plots
+~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.rdii
+   :members:
+   :show-inheritance:
+
+Seasonality Plots
+~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.seasonality
+   :members:
+   :show-inheritance:
+
+Calibration Dashboard
+~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.dashboard
+   :members:
+   :show-inheritance:
+
+Unit Hydrograph Plots
+~~~~~~~~~~~~~~~~~~~~~
+
+Six interactive Plotly figures for the sequential UH fitting workflow.
+All functions return :class:`plotly.graph_objects.Figure` and are importable
+directly from :mod:`sparsehydro.visualization`.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Function
+     - Description
+   * - :func:`plot_rainfall_flow_with_events`
+     - Two-panel timeseries with event shading bands
+   * - :func:`plot_filter_signals`
+     - sg_0 / sg_1 / sg_2 with threshold lines
+   * - :func:`plot_event_detection`
+     - sg_0 + peak markers + event shading
+   * - :func:`plot_sequential_fit`
+     - Rainfall / obs+pred / residual three-row panel
+   * - :func:`plot_parameter_evolution`
+     - Fitted params over time, colored by NSE
+   * - :func:`plot_effective_area`
+     - Bar chart of effective area per event
+
+.. automodule:: sparsehydro.visualization.unithydrograph
+   :members:
+   :show-inheritance:
+
+Whole-Flow Diagnostics
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.wholeflow
+   :members:
+   :show-inheritance:
+
+Bias and Event Splits
+~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.bias_multi
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.visualization.eventsplit_plot
+   :members:
+   :show-inheritance:
+
+Display Helpers
+~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.display
+   :members:
+   :show-inheritance:
+
+Visualization Model
+~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.model
+   :members:
+   :show-inheritance:
+
+
+----
+
+Viewer
+------
+
+Interactive Streamlit app for stepping through
+:func:`~sparsehydro.events.detect_event_hierarchy` +
+:class:`~sparsehydro.calibration.sequential.GlobalSequentialFitter` results by
+global event (Overview, Smoothing, UH Shape, Convolution).  Install the
+``viewer`` extra and launch it from a shell:
+
+.. code-block:: bash
+
+   pip install "sparsehydro[viewer]"
+   sparsehydro-viewer path/to/rain_stormflow.csv
+
+.. automodule:: sparsehydro.viewer.data
+   :members:
+
+.. automodule:: sparsehydro.viewer.cli
+   :members:
+
+----
+
+Studies
+-------
+
+Study-specific workflows built on the general components. Nothing outside
+``sparsehydro.studies`` imports from here, so a study can be read as a worked
+example of composing the library.
+
+.. automodule:: sparsehydro.studies.msdgc
+
+.. automodule:: sparsehydro.studies.msdgc.settings
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.defaults
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.data
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.detector
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.events
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.assessment
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.workflow
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.pareto
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.reporting
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.plots
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.notebook
+   :members:
+   :show-inheritance:

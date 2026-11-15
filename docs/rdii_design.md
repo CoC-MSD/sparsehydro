@@ -1,5 +1,7 @@
 # RDII Physics-Based Module — Design Document
 
+> **Historical design note.** Implemented in `sparsehydro.models.rdii`. Module paths below may be out of date; see the API reference for the current layout.
+
 ## Motivation
 
 SWMM's standard RDII calibration requires 12 monthly RTK parameter sets because a single set conflates soil moisture (Initial Abstraction) state with infrastructure leakage fraction. This module replaces monthly RTK tables with a physics-based Initial Abstraction (IA) recovery model driven by temperature and elapsed dry time, producing emergent seasonal RDII variation from one parameter set per sewershed.
@@ -163,7 +165,7 @@ For N=3: 7 + 9 = **16 ScalarParameters** total.
 
 ```python
 import pandas as pd
-from sparsehydro.rdii import RDIIModel
+from sparsehydro.models.rdii import RDIIModel
 
 # Build input DataFrame
 df = pd.DataFrame({
@@ -220,7 +222,7 @@ peak-vs-baseflow trade-off.
 ### Usage
 
 ```python
-from sparsehydro.rdii import RDIIModel
+from sparsehydro.models.rdii import RDIIModel
 from sparsehydro.calibration import (
     CalibrationProblem, NSGAIISolver, PeakWeightedMSE, NashSutcliffe,
 )
@@ -254,7 +256,7 @@ random float sampling, population stored every generation.
 ### Time Series
 
 ```python
-from sparsehydro.rdii import plot_timeseries
+from sparsehydro.visualization import plot_timeseries
 
 fig = plot_timeseries(
     datetime=df["datetime"],
@@ -271,7 +273,7 @@ observed vs predicted flow lines (bottom row), shared X-axis.
 ### Pareto Front Evolution
 
 ```python
-from sparsehydro.rdii import plot_pareto_evolution
+from sparsehydro.visualization import plot_pareto_evolution
 
 fig = plot_pareto_evolution(opt_result)
 fig.show()
@@ -284,7 +286,7 @@ population solutions (grey) with Pareto-front solutions highlighted
 ### Parallel Coordinates
 
 ```python
-from sparsehydro.rdii import plot_parallel_coordinates
+from sparsehydro.visualization import plot_parallel_coordinates
 
 fig = plot_parallel_coordinates(opt_result, color_by="nse")
 fig.show()

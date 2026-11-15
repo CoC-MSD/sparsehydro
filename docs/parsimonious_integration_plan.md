@@ -1,5 +1,7 @@
 # Parsimonious Functions → SparseHydro Integration Plan
 
+> **Historical design note.** The unit hydrographs live in `sparsehydro.models.unithydrograph`; sequential fitting in `sparsehydro.calibration.sequential`. Module paths below may be out of date; see the API reference for the current layout.
+
 ## Goal
 
 Integrate the Parsimonious Functions unit-hydrograph workflow into `sparsehydro`

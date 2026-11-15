@@ -44,9 +44,67 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   `CalibrationProblem.evaluate_single(x, index)`.
 - `sparsehydro.models.convolution.convolve_causal()`, shared by all routing.
 - Contributor guide, code of conduct, pull request and issue templates.
+- `sparsehydro.metrics`: one implementation of each goodness-of-fit formula as
+  a plain function (`mse`, `rmse`, `mae`, `nash_sutcliffe`, `log_nse`, `kge`,
+  `pbias`, `volume_relative_error`, `index_of_agreement`,
+  `concordance_correlation`, `peak_weighted_mse`, `top_peak_indices`,
+  `peak_regression_slope`, `fit_summary`). Objectives, plots, the viewer and
+  the study code all call these instead of their own copies.
+- `sparsehydro.calibration.selection` (`feasible_history`,
+  `select_peak_filtered_pareto`), `calibration.splits.masks`
+  (`dry_weather_mask`, `storm_scoring_mask`, `melt_scoring_mask`),
+  `calibration.diagnostics.parameter_table` and a public `identify_pareto`.
+- `sparsehydro.models.presets` for ready-made compositions.
+- `VerificationError`, raised when an internal consistency check fails
+  (previously bare `numpy.testing` assertions).
+- `sparsehydro.studies.msdgc.enable_notebook_logging()`: study progress is now
+  logged rather than printed; call this to see it in a notebook.
+- `tests/test_layering.py` enforces the package layers (see `CONTRIBUTING.md`):
+  no upward imports, nothing imports `sparsehydro.studies`, and package
+  `__init__` files only re-export.
 
 ### Changed
 
+- **BREAKING:** modules regrouped so each package has one job and imports
+  only from the layers below it. Names exported from a package's
+  `__init__` (for example `from sparsehydro.calibration import NashSutcliffe`,
+  `from sparsehydro.events import detect_events`) still work; imports from the
+  old module paths do not. Old to new:
+
+  | Old | New |
+  |---|---|
+  | `calibration.objectives` | `metrics.objectives` |
+  | `calibration.splits.metrics` | `metrics.events` |
+  | `models.unithydrograph.sequential` (and its names in `models.unithydrograph`) | `calibration.sequential` |
+  | `models.wholeflow_compact`, `models.wholeflow_pattern` | `models.presets.wholeflow` |
+  | baseflow names re-exported from `models.wholeflow_pattern` | `models.baseflow` |
+  | snow names re-exported from `models.rdii.initial_abstraction` | `models.forcing` |
+  | `events.imported` | `events.io` |
+  | logic in `events/__init__`, `filters/__init__` | `events.records`, `events.detection`, `events.io`, `filters.savgol` |
+  | `data.wholeflow` (assembly) | `data.assembly` |
+  | `data.wholeflow` (FlowFinity, air temperature) | `studies.msdgc.data` |
+  | `events.msdgc` | `studies.msdgc.detector` (`events_to_dataframe` renamed `msdgc_events_to_dataframe`) |
+  | `calibration.msdgc_assessment`, `calibration.wholeflow_acceptance` | `studies.msdgc.assessment` |
+  | `calibration.msdgc_pareto` | `studies.msdgc.pareto` |
+  | `calibration.pattern_workflow` | `studies.msdgc.workflow` |
+  | `calibration.pattern_reporting` | `studies.msdgc.reporting` |
+  | `calibration.wholeflow_workflow` | `calibration.selection`, `calibration.splits.masks`, `calibration.diagnostics`, `studies.msdgc.events`, `studies.msdgc.reporting` |
+  | study settings in `configuration` (`ModelSettings`, `CalibrationSettings`, `StudySettings`, ...) | `studies.msdgc.settings` |
+  | `visualization.wholeflow_diagnostics` | `visualization.wholeflow` (generic plots); `studies.msdgc.plots` (MSDGC figures) |
+  | `visualization.wholeflow_presentation` | `studies.msdgc.plots` |
+  | `VisualizationModel` in `visualization.timeseries` | `visualization.model` |
+
+  Pickled calibration problems or results that reference
+  `sparsehydro.calibration.objectives` classes will not load.
+- **BREAKING:** `download_flowfinity_inputs` takes `username`/`password` (or a
+  `client`) and otherwise reads `FLOWFINITY_USERNAME`/`FLOWFINITY_PASSWORD`;
+  the `auth_dir` argument, which imported a credentials module from
+  `sys.path`, is gone.
+- `select_peak_filtered_pareto` predicts through `predict_arrays()` and takes
+  the output name (`predicted="total_cfs"`) instead of calling
+  `predict_total_cfs`.
+- Importing `sparsehydro` or `sparsehydro.models` no longer loads calibration,
+  events, filters, metrics or plotting code.
 - **BREAKING:** unit hydrograph time parameters are in hours and renamed
   (`GammaUH(tt, tp)` -> `alpha`, `theta`; `NashUH(k)` -> `K`;
   `TriangleUH(tp, tt)` -> `Tp`, `Tb`; `RectangleUH(tr)` -> `Tr`;
@@ -77,6 +135,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ### Removed
 
+- **BREAKING:** `lin_ccc`; use `sparsehydro.metrics.concordance_correlation`
+  (`undefined="nan"` reproduces its NaN behaviour).
 - Notebooks, Git LFS, generated plot artifacts and most bundled monitoring
   data from the repository (tracked data went from about 63 MB to under 1 MB).
 - The bundled `swmmrdii` package, which could not be imported.

@@ -70,7 +70,7 @@ problem instance is passed unchanged to any solver backend.
 Object Relationships
 --------------------
 
-Every model subclasses the abstract :class:`~sparsehydro.interfaces.IModel`
+Every model subclasses the abstract :class:`~sparsehydro.models.base.IModel`
 lifecycle and exposes named :class:`~sparsehydro.parameters.ScalarParameter` and
 :class:`~sparsehydro.parameters.VectorParameter` objects through a built-in
 registry.  Domain models extend either ``IModel`` directly or the

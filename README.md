@@ -237,6 +237,24 @@ sequenceDiagram
 - **Interactive dashboards** — Plotly-based plots for Pareto evolution, parallel
   coordinates, calibration time-series with IQR bands, and multi-panel dashboards
 
+## Package layout
+
+| Package | Contents |
+|---|---|
+| `sparsehydro` | Core: `IModel`, `ScalarParameter`, `registry`, `ModelState` |
+| `sparsehydro.metrics` | Metric functions (`nash_sutcliffe`, `kge`, `pbias`, ...) and calibration objectives |
+| `sparsehydro.filters` | Savitzky-Golay smoothing, dry-weather patterns |
+| `sparsehydro.data` | File IO, data assembly, data service clients |
+| `sparsehydro.events` | Event detection, screening and records |
+| `sparsehydro.models` | Components (unit hydrographs, RDII, abstraction, snow, baseflow), `CompositeModel`, presets |
+| `sparsehydro.calibration` | `CalibrationProblem`, solvers, splits, Pareto selection, sequential fitting |
+| `sparsehydro.configuration` | Build models, objectives and solvers from a dict or JSON/YAML file |
+| `sparsehydro.visualization` | Interactive Plotly figures |
+| `sparsehydro.studies` | Study-specific workflows (for example `studies.msdgc`) |
+
+Each package imports only from the ones above it in this table; see
+[CONTRIBUTING.md](CONTRIBUTING.md#7-where-code-goes).
+
 ## Installation
 
 ```bash
