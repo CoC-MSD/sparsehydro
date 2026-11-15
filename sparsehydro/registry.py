@@ -18,7 +18,76 @@ Models can self-register at definition time using it as a decorator::
 from __future__ import annotations
 
 import inspect
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
+
+if TYPE_CHECKING:
+    from .models.base import IModel
+
+
+class NamedRegistry:
+    """A simple name -> factory registry (used for objectives and solvers).
+
+    A factory is any callable returning the object, usually a class::
+
+        objective_registry.add("my_metric", MyMetric)
+        objective_registry.create("my_metric", mask=train)
+
+    :param kind: Human-readable kind for error messages (e.g. ``"objective"``).
+    """
+
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
+        self._factories: dict[str, Any] = {}
+
+    def add(self, name: str, factory: Any, *, replace: bool = False) -> Any:
+        """Register *factory* under *name* and return it.
+
+        :raises ValueError: If *name* is taken and *replace* is false.
+        """
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"{self.kind} name must be a non-empty string")
+        if not callable(factory):
+            raise TypeError(f"{self.kind} factory for {name!r} is not callable")
+        if name in self._factories and not replace:
+            raise ValueError(f"A {self.kind} named {name!r} is already registered")
+        self._factories[name] = factory
+        return factory
+
+    def register(self, name: str):
+        """Decorator form of :meth:`add`."""
+        def decorator(factory):
+            return self.add(name, factory)
+        return decorator
+
+    def unregister(self, name: str) -> None:
+        """Remove *name*."""
+        self.get(name)
+        del self._factories[name]
+
+    def get(self, name: str) -> Any:
+        """Return the factory for *name*.
+
+        :raises KeyError: Listing the registered names when *name* is unknown.
+        """
+        try:
+            return self._factories[name]
+        except KeyError:
+            raise KeyError(f"No {self.kind} named {name!r}. Registered: {self.names()}") from None
+
+    def create(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        """Call the factory for *name* with the given arguments."""
+        return self.get(name)(*args, **kwargs)
+
+    def names(self) -> list[str]:
+        """Sorted registered names."""
+        return sorted(self._factories)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._factories
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.names())
+
 
 class ModelRegistry:
     """Central registry for tracking compatible parsimonious model classes.

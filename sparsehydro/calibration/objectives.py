@@ -1013,3 +1013,31 @@ def _peak_regression_slope(observed_peaks: np.ndarray, modeled_peaks: np.ndarray
         return float("nan")
     denominator = float(x @ x)
     return float(x @ y / denominator) if denominator > 0 else float("nan")
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+from ..registry import NamedRegistry  # noqa: E402
+
+#: Objectives by name (their ``name`` class variable), for configuration.
+#: Register your own with ``objective_registry.add(MyObjective.name, MyObjective)``.
+objective_registry = NamedRegistry("objective")
+
+
+def _register_builtin_objectives() -> None:
+    import inspect
+
+    stack = list(IObjective.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        stack.extend(cls.__subclasses__())
+        name = getattr(cls, "name", None)
+        if (not inspect.isabstract(cls) and isinstance(name, str) and name
+                and cls.__module__ == __name__ and name not in objective_registry):
+            objective_registry.add(name, cls)
+
+
+_register_builtin_objectives()
+
