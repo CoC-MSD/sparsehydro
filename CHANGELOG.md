@@ -107,6 +107,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 - `select_peak_filtered_pareto` predicts through `predict_arrays()` and takes
   the output name (`predicted="total_cfs"`) instead of calling
   `predict_total_cfs`.
+- Tank abstraction models (`tank-constant`, `tank-linear`, `tank-sqrt`) run in
+  a compiled kernel: 15-40x faster (a month of 5-minute data went from 22-64 ms
+  to 0.5-3 ms per run), with results identical to the previous loop. A
+  subclass with its own `_drainage_full` still runs in Python.
+- Tank models register `ae_min_le_ae_max` as an inequality constraint, so
+  optimisers respect `ae_min <= ae_max` (previously only `validate()` checked
+  it, which calibration does not call).
 - Importing `sparsehydro` or `sparsehydro.models` no longer loads calibration,
   events, filters, metrics or plotting code.
 - **BREAKING:** unit hydrograph time parameters are in hours and renamed

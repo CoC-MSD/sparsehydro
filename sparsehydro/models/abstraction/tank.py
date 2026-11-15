@@ -12,7 +12,10 @@ rainfall→runoff volume scaling.  When chaining a tank into
 amplitude ``A = 1`` so the gain is not double-counted.
 
 The tank state is advanced with sub-stepping (``n_substeps`` per time step) for
-numerical stability of the drainage integration.
+numerical stability of the drainage integration. The three built-in drainage
+laws run in a compiled kernel (with the ``speed`` extra); a subclass that
+defines its own :meth:`~TankAbstractionModel._drainage_full` runs the same
+loop in Python.
 """
 
 from __future__ import annotations
@@ -23,10 +26,39 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
+from ..._numba import njit
 from ...enums import ModelState
-from ...parameters import FieldRecord, ScalarParameter
+from ...parameters import ConstraintRecord, FieldRecord, ScalarParameter
 from ...registry import registry
 from ..base import IModel
+
+
+#: Drainage-law codes understood by :func:`_tank_kernel`.
+_LAW_CONSTANT, _LAW_LINEAR, _LAW_SQRT = 0, 1, 2
+
+
+@njit(cache=True)
+def _tank_kernel(rain, V_tank, ae_min, ae_max, drain, n_substeps, law):  # pragma: no cover - compiled
+    """Advance the tank; same operation order as the Python loop (bit-identical)."""
+    excess = np.zeros(rain.shape[0])
+    V = 0.0
+    for i in range(rain.shape[0]):
+        R = rain[i]
+        w = min(max(V / V_tank, 0.0), 1.0)
+        ae = ae_max - w * (ae_max - ae_min)
+        excess[i] = max(R * ae, 0.0)
+        r_sub = R / n_substeps
+        for _ in range(n_substeps):
+            V += r_sub
+            if law == _LAW_CONSTANT:
+                full = min(drain, V)
+            elif law == _LAW_LINEAR:
+                full = min(drain * V, V)
+            else:
+                full = min(drain * np.sqrt(max(V, 0.0)), V)
+            V -= full / n_substeps
+            V = min(max(V, 0.0), V_tank)
+    return excess
 
 
 class TankAbstractionModel(IModel):
@@ -59,6 +91,8 @@ class TankAbstractionModel(IModel):
     _drain_upper: ClassVar[float] = 1000.0
     _drain_units: ClassVar[str] = ""
     _drain_desc: ClassVar[str] = "Drainage parameter"
+    #: Kernel drainage-law code; ``None`` runs :meth:`_drainage_full` in Python.
+    _drain_law: ClassVar[int | None] = None
 
     def __init__(
         self,
@@ -92,9 +126,7 @@ class TankAbstractionModel(IModel):
         :returns: Nothing.
         :rtype: None
         """
-        self._scalars = {}
-        self._vectors = {}
-        self._constraints = []
+        self._reset_registries()
         self.register_scalar_parameter(ScalarParameter(
             "tank_V", value=self._V_tank_init, lower_bound=0.1, upper_bound=1e6,
             description="Tank capacity (wetness-proxy storage)",
@@ -112,6 +144,8 @@ class TankAbstractionModel(IModel):
             lower_bound=self._drain_lower, upper_bound=self._drain_upper,
             units=self._drain_units, description=self._drain_desc,
         ))
+        self.register_inequality_constraint(ConstraintRecord(
+            "ae_min_le_ae_max", "Gain at a full tank no larger than at an empty one (ae_min - ae_max <= 0)"))
         depth_units = "in" if self._units == "imperial" else "mm"
         self.register_output_field(FieldRecord(name="datetime", description="Simulation time step"))
         self.register_output_field(FieldRecord(
@@ -120,6 +154,10 @@ class TankAbstractionModel(IModel):
             calibratable=False,
         ))
         self._state = ModelState.INITIALIZED
+
+    def inequality_constraints(self) -> list[float]:
+        """``[ae_min - ae_max]``; feasible when ``<= 0``."""
+        return [self.get_scalar_parameter("tank_ae_min").value - self.get_scalar_parameter("tank_ae_max").value]
 
     def validate(self) -> bool:
         """Validate parameter bounds and the ``ae_min <= ae_max`` ordering.
@@ -152,6 +190,8 @@ class TankAbstractionModel(IModel):
         df["datetime"] = pd.to_datetime(df["datetime"])
         df[self._rainfall_col] = df[self._rainfall_col].fillna(0.0).clip(lower=0.0)
         self._prepared_df = df
+        self._rain = np.ascontiguousarray(df[self._rainfall_col].to_numpy(dtype=float))
+        self._datetime = df["datetime"].to_numpy()
         self._state = ModelState.PREPARED
 
     def predict_arrays(self) -> dict[str, np.ndarray]:
@@ -163,8 +203,7 @@ class TankAbstractionModel(IModel):
         """
         if self._prepared_df is None:
             raise RuntimeError("Call prepare(data) before predict().")
-        df = self._prepared_df
-        rain = df[self._rainfall_col].to_numpy(dtype=float)
+        rain = self._rain
 
         V_tank = max(self.get_scalar_parameter("tank_V").value, 1e-9)
         ae_min = self.get_scalar_parameter("tank_ae_min").value
@@ -172,6 +211,17 @@ class TankAbstractionModel(IModel):
         drain = self.get_scalar_parameter(self._drain_param_name).value
         n = self._n_substeps
 
+        if self._drain_law is not None:
+            excess = _tank_kernel(rain, float(V_tank), float(ae_min),
+                                  float(ae_max), float(drain), int(n), int(self._drain_law))
+        else:
+            excess = self._advance_python(rain, V_tank, ae_min, ae_max, drain, n)
+
+        self._state = ModelState.PREDICTED
+        return {"datetime": self._datetime, self._excess_col: excess}
+
+    def _advance_python(self, rain, V_tank, ae_min, ae_max, drain, n) -> np.ndarray:
+        """Reference loop using :meth:`_drainage_full` (custom drainage laws)."""
         excess = np.zeros(len(rain))
         V = 0.0
         for i, R in enumerate(rain):
@@ -183,9 +233,7 @@ class TankAbstractionModel(IModel):
                 V += r_sub
                 V -= self._drainage_full(V, drain) / n
                 V = min(max(V, 0.0), V_tank)
-
-        self._state = ModelState.PREDICTED
-        return {"datetime": df["datetime"].values, self._excess_col: excess}
+        return excess
 
     def predict(self) -> pd.DataFrame:
         """Advance the tank over the series and return effective rainfall.
@@ -228,6 +276,7 @@ class ConstantDrainTank(TankAbstractionModel):
     """
 
     model_name: ClassVar[str] = "tank-constant"
+    _drain_law: ClassVar[int | None] = _LAW_CONSTANT
     _drain_param_name: ClassVar[str] = "tank_qd"
     _drain_lower: ClassVar[float] = 1e-6
     _drain_upper: ClassVar[float] = 1000.0
@@ -254,6 +303,7 @@ class LinearDrainTank(TankAbstractionModel):
     """
 
     model_name: ClassVar[str] = "tank-linear"
+    _drain_law: ClassVar[int | None] = _LAW_LINEAR
     _drain_param_name: ClassVar[str] = "tank_k"
     _drain_lower: ClassVar[float] = 1e-6
     _drain_upper: ClassVar[float] = 1.0
@@ -284,6 +334,7 @@ class SqrtDrainTank(TankAbstractionModel):
     """
 
     model_name: ClassVar[str] = "tank-sqrt"
+    _drain_law: ClassVar[int | None] = _LAW_SQRT
     _drain_param_name: ClassVar[str] = "tank_k"
     _drain_lower: ClassVar[float] = 1e-6
     _drain_upper: ClassVar[float] = 10.0
