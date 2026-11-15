@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from sparsehydro.calibration import WeightedRMSE
 from sparsehydro.models.unithydrograph import (
@@ -45,7 +46,7 @@ def test_sequential_fitter_param_evolution(muum019_window, muum019_hierarchy):
     fitter = SequentialFitter(lambda: GammaUH(), muum019_window, subs[:3])
     summary = fitter.fit(verbose=False)
     pe = summary.parameter_evolution()
-    assert "A" in pe.columns and "tt" in pe.columns and "tp" in pe.columns
+    assert "A" in pe.columns and "alpha" in pe.columns and "theta" in pe.columns
     assert len(pe) == len(summary.events)
 
 
@@ -68,3 +69,12 @@ def test_global_fitter_predictions_finite(muum019_window, muum019_hierarchy):
     q = summary.global_predicted["Q_pred"].to_numpy()
     assert np.all(np.isfinite(q))
     assert np.all(q >= 0.0)
+
+
+def test_calibrated_areas_are_on_the_per_step_scale(muum019_window, muum019_hierarchy):
+    """A is a per-rate amplitude; calibrated_areas() divides by dt for comparison."""
+    _, subs, _ = muum019_hierarchy
+    summary = SequentialFitter(lambda: GammaUH(), muum019_window, subs[:2]).fit(verbose=False)
+    assert summary.dt_hours == pytest.approx(5.0 / 60.0)
+    a = [dict(zip(c.param_names, c.pareto_X[0]))["A"] for c in summary.calibration_results]
+    np.testing.assert_allclose(summary.calibrated_areas(), np.array(a) / summary.dt_hours)

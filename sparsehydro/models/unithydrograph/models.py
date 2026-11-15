@@ -1,20 +1,18 @@
-"""Native IUnitHydroComponent unit hydrograph models.
+"""Classic unit hydrograph shapes: gamma / Nash, triangle, rectangle, decay.
 
-Provides six self-contained implementations that follow the SparseHydro
-lifecycle without depending on the legacy ``UnitHydrograph`` adapter.
+All time parameters are in hours and kernels are exact bin averages of the
+continuous response (see :mod:`.base`). Each class is registered by name.
 
-All models return a DataFrame with ``"Q_pred"`` as the predicted-flow column,
-so the same ``CalibrationProblem.column_map`` works for both single models and
-:class:`~sparsehydro.models.EnsembleModel` composites.
-
-Kernel normalisation: ``sum(get_kernel(dt)) * dt ≈ 1.0``  (units: [1/hr])
-
-Convolution: ``Q = convolve(rain, kernel * A * dt)[:n]``
-so ``A`` represents the effective area ratio (stormflow / rain volume).
-
-The shared prepare/predict/finalize lifecycle lives in
-:class:`~sparsehydro.models.unithydrograph.base.UnitHydrographBase`; each class
-below contributes only its parameter registration and kernel shape.
+=================  ===============  ============================================
+Class              Registry name    Cumulative response ``F(t)``
+=================  ===============  ============================================
+``NashUH``         ``nash-uh``      ``P(n, t/K)`` (regularised lower gamma)
+``GammaUH``        ``gamma-uh``     ``P(alpha, t/theta)``
+``GammaDelayUH``   ``gamma-delay-uh`` as ``GammaUH`` shifted by ``td``
+``TriangleUH``     ``triangle-uh``  piecewise quadratic, peak at ``Tp``, ends ``Tb``
+``RectangleUH``    ``rectangle-uh`` ``min(t/Tr, 1)``
+``DecayUH``        ``decay-uh``     ``1 - exp(-t/K)`` (one linear reservoir)
+=================  ===============  ============================================
 """
 
 from __future__ import annotations
@@ -22,385 +20,240 @@ from __future__ import annotations
 from typing import ClassVar
 
 import numpy as np
-from scipy.special import gamma as gamma_func
+from scipy.special import gammainc, gammaincinv
 
-from ...enums import ModelState
-from ...parameters import ScalarParameter
-from .base import UnitHydrographBase
-from .kernels import (
+from ...parameters import ConstraintRecord, ScalarParameter
+from ...registry import registry
+from .base import UnitHydrographBase, reject_step_kwargs
+from .kernels import (  # noqa: F401 - re-exported for backwards compatibility
     MAX_STEPS as _MAX_STEPS,
-    finalize_kernel,
-    kernel_errstate,
     infer_dt_hours as _infer_dt_hours,
     normalize_kernel as _normalize_kernel,
     trim_pad as _trim_pad,
 )
 
-__all__ = [
-    "GammaUH",
-    "NashUH",
-    "TriangleUH",
-    "RectangleUH",
-    "DecayUH",
-    "GammaDelayUH",
-    # Re-exported for backwards compatibility with the pre-split private names.
-    "_MAX_STEPS",
-    "_infer_dt_hours",
-    "_normalize_kernel",
-    "_trim_pad",
-]
+__all__ = ["NashUH", "GammaUH", "GammaDelayUH", "TriangleUH", "RectangleUH", "DecayUH"]
+
+#: Bounds shared by time scales [hr].
+TIME_SCALE_BOUNDS: tuple[float, float] = (0.01, 240.0)
+#: Bounds shared by gamma-type shape parameters.
+SHAPE_BOUNDS: tuple[float, float] = (0.1, 50.0)
+
+
+def _gamma_cdf(t: np.ndarray, shape: float, scale: float) -> np.ndarray:
+    return gammainc(shape, np.asarray(t, dtype=float) / scale)
+
+
+def _gamma_ppf(q: float, shape: float, scale: float) -> float:
+    return float(gammaincinv(shape, q) * scale)
 
 
 # ---------------------------------------------------------------------------
-# Gamma UH
+# Gamma family
 # ---------------------------------------------------------------------------
 
-class GammaUH(UnitHydrographBase):
-    """Gamma-function unit hydrograph.
-
-    Shape: ``f(t) ∝ (t/tp)^tt * exp(-t/tp)``
-
-    :param A: Effective area ratio (stormflow / rain volume).  Bounds [0, 1e4].
-    :type A: float
-    :param tt: Shape parameter (dimensionless).  Bounds [0.01, 50].
-    :type tt: float
-    :param tp: Scale / time-to-peak in time steps.  Bounds [0.01, 500].
-    :type tp: float
-    """
-
-    model_name: ClassVar[str] = "gamma-uh"
-
-    def __init__(self, A: float = 100.0, tt: float = 2.0, tp: float = 5.0) -> None:
-        super().__init__()
-        self._A_init = float(A)
-        self._tt_init = float(tt)
-        self._tp_init = float(tp)
-
-    def initialize(self) -> None:
-        """Register the A, tt, tp scalar parameters and advance to INITIALIZED.
-
-        :returns: Nothing.
-        :rtype: None
-        """
-        self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
-        self.register_scalar_parameter(ScalarParameter("tt", value=self._tt_init, lower_bound=0.01, upper_bound=50.0, description="Gamma shape parameter"))
-        self.register_scalar_parameter(ScalarParameter("tp", value=self._tp_init, lower_bound=0.01, upper_bound=500.0, units="steps", description="Time to peak in time steps"))
-        self._state = ModelState.INITIALIZED
-
-    def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
-        """Return the normalized gamma UH ordinate array.
-
-        :param dt_hours: Time-step size [hr].
-        :type dt_hours: float
-        :param n_steps: Number of output steps; defaults to the natural support.
-        :type n_steps: int | None
-        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
-        :rtype: numpy.ndarray
-        """
-        tt = self._p("tt")
-        tp = max(self._p("tp"), 1e-6)
-        max_steps = min(_MAX_STEPS, max(int(5 * tp + 1), 20))
-        t = np.arange(1, max_steps + 1, dtype=float)
-        with kernel_errstate():
-            raw = np.maximum((t / tp) ** tt * np.exp(-t / tp), 0.0)
-        return finalize_kernel(raw, dt_hours, n_steps)
-
-
-# ---------------------------------------------------------------------------
-# Nash cascade UH
-# ---------------------------------------------------------------------------
-
+@registry.register
 class NashUH(UnitHydrographBase):
-    """Nash cascade (linear-reservoir) unit hydrograph.
+    """Nash cascade: ``n`` equal linear reservoirs with storage constant ``K``.
 
-    Shape: ``f(t) ∝ t^(n-1) * exp(-t/k)``
+    The instantaneous response is the gamma density with shape ``n`` and scale
+    ``K``; ``n`` may be non-integer. Mean ``n K``, variance ``n K^2``, peak at
+    ``(n - 1) K`` for ``n >= 1``.
 
-    :param A: Effective area ratio.  Bounds [0, 1e4].
-    :type A: float
-    :param n: Number of linear reservoirs.  Bounds [0.01, 100].
-    :type n: float
-    :param k: Storage coefficient in time steps.  Bounds [0.01, 500].
-    :type k: float
+    :param A: Amplitude (see :class:`~.base.UnitHydrographBase`).
+    :param n: Number of reservoirs [-]. Bounds [0.1, 50].
+    :param K: Storage constant of each reservoir [hr]. Bounds [0.01, 240].
+    :param delay: Optional delay ``td`` [hr].
     """
 
     model_name: ClassVar[str] = "nash-uh"
 
-    def __init__(self, A: float = 100.0, n: float = 2.0, k: float = 5.0) -> None:
-        super().__init__()
-        self._A_init = float(A)
-        self._n_init = float(n)
-        self._k_init = float(k)
+    def __init__(self, A: float = 1.0, n: float = 3.0, K: float = 0.5, *,
+                 delay: float | None = None, **legacy) -> None:
+        reject_step_kwargs("NashUH", legacy, {"k": "K [hr] (= k_steps * dt_hours)"})
+        super().__init__(A, delay=delay)
+        self._n_init, self._K_init = float(n), float(K)
 
-    def initialize(self) -> None:
-        """Register the A, n, k scalar parameters and advance to INITIALIZED.
+    def _register_shape_parameters(self) -> None:
+        self.register_scalar_parameter(ScalarParameter(
+            "n", value=self._n_init, lower_bound=SHAPE_BOUNDS[0], upper_bound=SHAPE_BOUNDS[1],
+            description="Number of linear reservoirs"))
+        self.register_scalar_parameter(ScalarParameter(
+            "K", value=self._K_init, lower_bound=TIME_SCALE_BOUNDS[0],
+            upper_bound=TIME_SCALE_BOUNDS[1], units="hr", description="Reservoir storage constant"))
 
-        :returns: Nothing.
-        :rtype: None
-        """
-        self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
-        self.register_scalar_parameter(ScalarParameter("n", value=self._n_init, lower_bound=0.01, upper_bound=100.0, description="Number of linear reservoirs"))
-        self.register_scalar_parameter(ScalarParameter("k", value=self._k_init, lower_bound=0.01, upper_bound=500.0, units="steps", description="Storage coefficient in time steps"))
-        self._state = ModelState.INITIALIZED
+    def _cdf(self, t):
+        return _gamma_cdf(t, self._p("n"), self._p("K"))
 
-    def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
-        """Return the normalized Nash cascade UH ordinate array.
+    def _ppf(self, q):
+        return _gamma_ppf(q, self._p("n"), self._p("K"))
 
-        :param dt_hours: Time-step size [hr].
-        :type dt_hours: float
-        :param n_steps: Number of output steps; defaults to the natural support.
-        :type n_steps: int | None
-        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
-        :rtype: numpy.ndarray
-        """
-        n_val = max(self._p("n"), 1e-6)
-        k_val = max(self._p("k"), 1e-6)
-        max_steps = min(_MAX_STEPS, max(int(5 * n_val * k_val + 1), 20))
-        t = np.arange(1, max_steps + 1, dtype=float)
-        eps = np.finfo(float).eps
-        with kernel_errstate():
-            denom = (k_val**n_val) * gamma_func(n_val)
-            # denom overflows to inf for large n and k (500**100 * gamma(100)),
-            # which would zero every ordinate.  It is a constant scale factor
-            # that finalize_kernel's normalisation divides out regardless, so
-            # dropping it when it is unusable changes nothing but the overflow.
-            if not np.isfinite(denom) or denom <= 0.0:
-                denom = 1.0
-            raw = np.maximum((t**(n_val - 1)) * np.exp(-t / k_val) / max(denom, eps), 0.0)
-        return finalize_kernel(raw, dt_hours, n_steps)
+
+@registry.register
+class GammaUH(UnitHydrographBase):
+    """Gamma-distribution unit hydrograph (shape ``alpha``, scale ``theta``).
+
+    The same response as :class:`NashUH` with ``n = alpha`` and ``K = theta``;
+    provided under the statistical parameter names. Peak at
+    ``(alpha - 1) theta`` for ``alpha >= 1``.
+
+    :param A: Amplitude.
+    :param alpha: Shape [-]. Bounds [0.1, 50].
+    :param theta: Scale [hr]. Bounds [0.01, 240].
+    :param delay: Optional delay ``td`` [hr].
+    """
+
+    model_name: ClassVar[str] = "gamma-uh"
+
+    def __init__(self, A: float = 1.0, alpha: float = 3.0, theta: float = 0.5, *,
+                 delay: float | None = None, **legacy) -> None:
+        reject_step_kwargs("GammaUH", legacy, {
+            "tt": "alpha (= tt + 1)", "tp": "theta [hr] (= tp_steps * dt_hours)"})
+        super().__init__(A, delay=delay)
+        self._alpha_init, self._theta_init = float(alpha), float(theta)
+
+    def _register_shape_parameters(self) -> None:
+        self.register_scalar_parameter(ScalarParameter(
+            "alpha", value=self._alpha_init, lower_bound=SHAPE_BOUNDS[0],
+            upper_bound=SHAPE_BOUNDS[1], description="Gamma shape"))
+        self.register_scalar_parameter(ScalarParameter(
+            "theta", value=self._theta_init, lower_bound=TIME_SCALE_BOUNDS[0],
+            upper_bound=TIME_SCALE_BOUNDS[1], units="hr", description="Gamma scale"))
+
+    def _cdf(self, t):
+        return _gamma_cdf(t, self._p("alpha"), self._p("theta"))
+
+    def _ppf(self, q):
+        return _gamma_ppf(q, self._p("alpha"), self._p("theta"))
+
+
+@registry.register
+class GammaDelayUH(GammaUH):
+    """:class:`GammaUH` with a pure delay ``td`` [hr] registered by default."""
+
+    model_name: ClassVar[str] = "gamma-delay-uh"
+
+    def __init__(self, A: float = 1.0, alpha: float = 3.0, theta: float = 0.5,
+                 td: float = 0.5, **legacy) -> None:
+        reject_step_kwargs("GammaDelayUH", legacy, {
+            "tt": "alpha (= tt + 1)", "tp": "theta [hr] (= tp_steps * dt_hours)"})
+        super().__init__(A, alpha, theta, delay=td)
 
 
 # ---------------------------------------------------------------------------
-# Triangular UH
+# Triangle, rectangle, decay
 # ---------------------------------------------------------------------------
 
+@registry.register
 class TriangleUH(UnitHydrographBase):
-    """Triangular unit hydrograph.
+    """Triangular unit hydrograph rising to a peak at ``Tp`` and ending at ``Tb``.
 
-    Rising limb 0 → peak at ``tp``; falling limb peak → 0 at ``tt``.
+    Constraint ``Tp_lt_Tb``: ``Tp - Tb <= 0``.
 
-    :param A: Effective area ratio.  Bounds [0, 1e4].
-    :type A: float
-    :param tt: Total UH duration in time steps.  Bounds [5, 1000].
-    :type tt: float
-    :param tp: Time to peak in time steps.  Bounds [2, 500].  Must be < tt.
-    :type tp: float
+    :param A: Amplitude.
+    :param Tp: Time to peak [hr]. Bounds [0.05, 240].
+    :param Tb: Base time [hr]. Bounds [0.1, 960].
+    :param delay: Optional delay ``td`` [hr].
     """
 
     model_name: ClassVar[str] = "triangle-uh"
+    _finite_support: ClassVar[bool] = True
 
-    def __init__(self, A: float = 100.0, tt: float = 50.0, tp: float = 20.0) -> None:
-        super().__init__()
-        self._A_init = float(A)
-        self._tt_init = float(tt)
-        self._tp_init = float(tp)
+    def __init__(self, A: float = 1.0, Tp: float = 1.0, Tb: float = 3.0, *,
+                 delay: float | None = None, **legacy) -> None:
+        reject_step_kwargs("TriangleUH", legacy, {
+            "tp": "Tp [hr]", "tt": "Tb [hr] (total duration)"})
+        super().__init__(A, delay=delay)
+        self._Tp_init, self._Tb_init = float(Tp), float(Tb)
 
-    def initialize(self) -> None:
-        """Register the A, tt, tp scalar parameters and advance to INITIALIZED.
+    def _register_shape_parameters(self) -> None:
+        self.register_scalar_parameter(ScalarParameter(
+            "Tp", value=self._Tp_init, lower_bound=0.05, upper_bound=240.0, units="hr",
+            description="Time to peak"))
+        self.register_scalar_parameter(ScalarParameter(
+            "Tb", value=self._Tb_init, lower_bound=0.1, upper_bound=960.0, units="hr",
+            description="Base time (total duration)"))
+        self.register_inequality_constraint(ConstraintRecord("Tp_lt_Tb", "Tp - Tb <= 0"))
 
-        :returns: Nothing.
-        :rtype: None
-        """
-        self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
-        self.register_scalar_parameter(ScalarParameter("tt", value=self._tt_init, lower_bound=5.0, upper_bound=1000.0, units="steps", description="Total UH duration in time steps"))
-        self.register_scalar_parameter(ScalarParameter("tp", value=self._tp_init, lower_bound=2.0, upper_bound=500.0, units="steps", description="Time to peak in time steps"))
-        self._state = ModelState.INITIALIZED
+    def _constraint_residuals(self) -> list[float]:
+        return [self._p("Tp") - self._p("Tb")]
 
-    def _extra_valid(self) -> bool:
-        """Return whether the ``tp < tt`` ordering constraint holds.
+    def _shape(self) -> tuple[float, float]:
+        tb = max(self._p("Tb"), 1e-9)
+        tp = min(max(self._p("Tp"), 0.0), tb)
+        return tp, tb
 
-        :returns: ``True`` when time-to-peak precedes total duration.
-        :rtype: bool
-        """
-        return self._p("tp") < self._p("tt")
+    def _support_hours(self) -> float:
+        return min(self._shape()[1], self.max_duration_hours)
 
-    def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
-        """Return the normalized triangular UH ordinate array.
-
-        :param dt_hours: Time-step size [hr].
-        :type dt_hours: float
-        :param n_steps: Number of output steps; defaults to the natural support.
-        :type n_steps: int | None
-        :returns: Normalized UH ordinates [1/hr]; all zeros when ``tp >= tt``.
-        :rtype: numpy.ndarray
-        """
-        tt_val = self._p("tt")
-        tp_val = self._p("tp")
-        if tp_val >= tt_val:
-            return finalize_kernel(np.zeros(1), dt_hours, n_steps)
-        n = min(_MAX_STEPS, int(np.ceil(tt_val)) + 1)
-        t = np.arange(n, dtype=float)
-        raw = np.zeros(n)
-        rising = (t > 0) & (t <= tp_val)
-        raw[rising] = t[rising] / tp_val
-        falling = (t > tp_val) & (t <= tt_val)
-        raw[falling] = 1.0 - (t[falling] - tp_val) / (tt_val - tp_val)
-        raw = np.maximum(raw, 0.0)
-        return finalize_kernel(raw, dt_hours, n_steps)
+    def _cdf(self, t):
+        tp, tb = self._shape()
+        t = np.clip(np.asarray(t, dtype=float), 0.0, tb)
+        F = np.empty_like(t)
+        rising = t <= tp
+        F[rising] = t[rising] ** 2 / (tb * tp) if tp > 0.0 else 1.0
+        fall = ~rising
+        F[fall] = 1.0 - (tb - t[fall]) ** 2 / (tb * (tb - tp)) if tb > tp else 1.0
+        return F
 
 
-# ---------------------------------------------------------------------------
-# Rectangle UH
-# ---------------------------------------------------------------------------
-
+@registry.register
 class RectangleUH(UnitHydrographBase):
-    """Rectangular (instant-pulse) unit hydrograph.
+    """Uniform response over ``0 < t <= Tr``.
 
-    Shape: constant response over ``0 < t <= tr``, zero elsewhere.  Represents a
-    uniform runoff pulse with no rising/falling limb.
-
-    :param A: Effective area ratio.  Bounds [0, 1e4].
-    :type A: float
-    :param tr: Pulse duration in time steps.  Bounds [1, 1000].
-    :type tr: float
+    :param A: Amplitude.
+    :param Tr: Duration [hr]. Bounds [0.01, 480].
+    :param delay: Optional delay ``td`` [hr].
     """
 
     model_name: ClassVar[str] = "rectangle-uh"
+    _finite_support: ClassVar[bool] = True
 
-    def __init__(self, A: float = 100.0, tr: float = 10.0) -> None:
-        super().__init__()
-        self._A_init = float(A)
-        self._tr_init = float(tr)
+    def __init__(self, A: float = 1.0, Tr: float = 1.0, *, delay: float | None = None,
+                 **legacy) -> None:
+        reject_step_kwargs("RectangleUH", legacy, {"tr": "Tr [hr]"})
+        super().__init__(A, delay=delay)
+        self._Tr_init = float(Tr)
 
-    def initialize(self) -> None:
-        """Register the A, tr scalar parameters and advance to INITIALIZED.
+    def _register_shape_parameters(self) -> None:
+        self.register_scalar_parameter(ScalarParameter(
+            "Tr", value=self._Tr_init, lower_bound=0.01, upper_bound=480.0, units="hr",
+            description="Response duration"))
 
-        :returns: Nothing.
-        :rtype: None
-        """
-        self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
-        self.register_scalar_parameter(ScalarParameter("tr", value=self._tr_init, lower_bound=1.0, upper_bound=1000.0, units="steps", description="Pulse duration in time steps"))
-        self._state = ModelState.INITIALIZED
+    def _support_hours(self) -> float:
+        return min(max(self._p("Tr"), 1e-9), self.max_duration_hours)
 
-    def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
-        """Return the normalized rectangular UH ordinate array.
-
-        :param dt_hours: Time-step size [hr].
-        :type dt_hours: float
-        :param n_steps: Number of output steps; defaults to the natural support.
-        :type n_steps: int | None
-        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
-        :rtype: numpy.ndarray
-        """
-        tr_val = max(self._p("tr"), 1e-6)
-        n = min(_MAX_STEPS, int(np.ceil(tr_val)) + 1)
-        t = np.arange(n, dtype=float)
-        raw = np.zeros(n)
-        raw[(t > 0) & (t <= tr_val)] = 1.0
-        return finalize_kernel(raw, dt_hours, n_steps)
+    def _cdf(self, t):
+        return np.clip(np.asarray(t, dtype=float) / max(self._p("Tr"), 1e-9), 0.0, 1.0)
 
 
-# ---------------------------------------------------------------------------
-# Decay UH
-# ---------------------------------------------------------------------------
-
+@registry.register
 class DecayUH(UnitHydrographBase):
-    """Discrete exponential-decay unit hydrograph.
+    """Exponential decay: a single linear reservoir with storage constant ``K``.
 
-    Shape: ``f(t) ∝ alpha^t`` — a monotonic recession peaking at ``t = 0`` with
-    no rising limb.
+    Equal to :class:`NashUH` with ``n = 1``. The step-based ``alpha`` of earlier
+    versions maps to ``K = -dt_hours / ln(alpha)``.
 
-    :param A: Effective area ratio.  Bounds [0, 1e4].
-    :type A: float
-    :param alpha: Per-step decay ratio in ``[0, 1)``.  Bounds [0, 0.999999].
-    :type alpha: float
+    :param A: Amplitude.
+    :param K: Storage constant [hr]. Bounds [0.001, 480].
+    :param delay: Optional delay ``td`` [hr].
     """
 
     model_name: ClassVar[str] = "decay-uh"
 
-    def __init__(self, A: float = 100.0, alpha: float = 0.5) -> None:
-        super().__init__()
-        self._A_init = float(A)
-        self._alpha_init = float(alpha)
+    def __init__(self, A: float = 1.0, K: float = 0.25, *, delay: float | None = None,
+                 **legacy) -> None:
+        reject_step_kwargs("DecayUH", legacy, {"alpha": "K [hr] (= -dt_hours / ln(alpha))"})
+        super().__init__(A, delay=delay)
+        self._K_init = float(K)
 
-    def initialize(self) -> None:
-        """Register the A, alpha scalar parameters and advance to INITIALIZED.
+    def _register_shape_parameters(self) -> None:
+        self.register_scalar_parameter(ScalarParameter(
+            "K", value=self._K_init, lower_bound=1e-3, upper_bound=480.0, units="hr",
+            description="Reservoir storage constant"))
 
-        :returns: Nothing.
-        :rtype: None
-        """
-        self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
-        self.register_scalar_parameter(ScalarParameter("alpha", value=self._alpha_init, lower_bound=0.0, upper_bound=1.0 - 1e-6, description="Per-step decay ratio"))
-        self._state = ModelState.INITIALIZED
+    def _cdf(self, t):
+        return -np.expm1(-np.asarray(t, dtype=float) / self._p("K"))
 
-    def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
-        """Return the normalized decay UH ordinate array.
-
-        :param dt_hours: Time-step size [hr].
-        :type dt_hours: float
-        :param n_steps: Number of output steps; defaults to the natural support.
-        :type n_steps: int | None
-        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
-        :rtype: numpy.ndarray
-        """
-        alpha = min(max(self._p("alpha"), 0.0), 1.0 - 1e-9)
-        if alpha <= 0.0:
-            raw = np.array([1.0])
-            return finalize_kernel(raw, dt_hours, n_steps)
-        max_steps = min(_MAX_STEPS, max(int(np.log(1e-3) / np.log(alpha)) + 1, 20))
-        t = np.arange(max_steps, dtype=float)
-        with kernel_errstate():
-            raw = np.maximum(alpha**t, 0.0)
-        return finalize_kernel(raw, dt_hours, n_steps)
-
-
-# ---------------------------------------------------------------------------
-# Gamma UH with time delay
-# ---------------------------------------------------------------------------
-
-class GammaDelayUH(UnitHydrographBase):
-    """Gamma-function unit hydrograph with a pure time delay.
-
-    Shape: ``f(t) ∝ ((t-td)/tp)^tt * exp(-(t-td)/tp)`` for ``t > td``, else 0.
-    Captures a routing lag before the gamma response begins.
-
-    :param A: Effective area ratio.  Bounds [0, 1e4].
-    :type A: float
-    :param tt: Shape parameter (dimensionless).  Bounds [0.01, 50].
-    :type tt: float
-    :param tp: Scale / time-to-peak in time steps.  Bounds [0.01, 500].
-    :type tp: float
-    :param td: Delay before response onset, in time steps.  Bounds [0, 200].
-    :type td: float
-    """
-
-    model_name: ClassVar[str] = "gamma-delay-uh"
-
-    def __init__(self, A: float = 1.0, tt: float = 2.0, tp: float = 5.0, td: float = 5.0) -> None:
-        super().__init__()
-        self._A_init = float(A)
-        self._tt_init = float(tt)
-        self._tp_init = float(tp)
-        self._td_init = float(td)
-
-    def initialize(self) -> None:
-        """Register the A, tt, tp, td scalar parameters and advance to INITIALIZED.
-
-        :returns: Nothing.
-        :rtype: None
-        """
-        self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
-        self.register_scalar_parameter(ScalarParameter("tt", value=self._tt_init, lower_bound=0.01, upper_bound=50.0, description="Gamma shape parameter"))
-        self.register_scalar_parameter(ScalarParameter("tp", value=self._tp_init, lower_bound=0.01, upper_bound=500.0, units="steps", description="Time to peak in time steps"))
-        self.register_scalar_parameter(ScalarParameter("td", value=self._td_init, lower_bound=0.0, upper_bound=200.0, units="steps", description="Response delay in time steps"))
-        self._state = ModelState.INITIALIZED
-
-    def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
-        """Return the normalized delayed-gamma UH ordinate array.
-
-        :param dt_hours: Time-step size [hr].
-        :type dt_hours: float
-        :param n_steps: Number of output steps; defaults to the natural support.
-        :type n_steps: int | None
-        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
-        :rtype: numpy.ndarray
-        """
-        tt = self._p("tt")
-        tp = max(self._p("tp"), 1e-6)
-        td = max(self._p("td"), 0.0)
-        max_steps = min(_MAX_STEPS, max(int(5 * tp + td + 1), 20))
-        t = np.arange(1, max_steps + 1, dtype=float)
-        ts = t - td
-        with kernel_errstate():
-            raw = np.where(ts > 0.0, (ts / tp) ** tt * np.exp(-ts / tp), 0.0)
-            raw = np.maximum(raw, 0.0)
-        return finalize_kernel(raw, dt_hours, n_steps)
+    def _ppf(self, q):
+        return float(-self._p("K") * np.log1p(-q))

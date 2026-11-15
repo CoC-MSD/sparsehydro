@@ -215,6 +215,12 @@ class RDIIModel(IModel):
                 "(freeze threshold must be below the reference temperature)"
             ),
         ))
+        # Constraints of the UH components (e.g. a triangle's Tp < Tb).
+        for i, uh in enumerate(self._uh_components, 1):
+            for record in uh._constraint_registry:
+                self.register_inequality_constraint(ConstraintRecord(
+                    name=f"uh{i}_{record.name}", description=record.description,
+                ))
 
         depth_units = "in" if self._units == "imperial" else "mm"
         self.register_output_field(FieldRecord(
@@ -261,6 +267,10 @@ class RDIIModel(IModel):
             T_ref = self.get_scalar_parameter("ia_T_ref").value
             if T_freeze >= T_ref:
                 return False
+
+        self._sync_to_submodels()
+        if not all(uh.validate() for uh in self._uh_components):
+            return False
 
         self._state = ModelState.VALIDATED
         return True
@@ -424,10 +434,10 @@ class RDIIModel(IModel):
     def inequality_constraints(self) -> list[float]:
         """Inequality constraint residuals for the optimizer.
 
-        Returns ``[Σ R_i - 1.0, ia_T_freeze - ia_T_ref]``.
-        A value ≤ 0 means feasible.
+        Returns ``[Σ R_i - 1.0, ia_T_freeze - ia_T_ref]`` followed by the UH
+        components' own residuals. A value ≤ 0 means feasible.
 
-        :returns: Two-element list ``[Σ R_i - 1, ia_T_freeze - ia_T_ref]``.
+        :returns: Residuals in registration order.
         :rtype: list[float]
         """
         R_sum = sum(
@@ -436,7 +446,13 @@ class RDIIModel(IModel):
         )
         T_freeze = self.get_scalar_parameter("ia_T_freeze").value
         T_ref = self.get_scalar_parameter("ia_T_ref").value
-        return [R_sum - 1.0, T_freeze - T_ref]
+        out = [R_sum - 1.0, T_freeze - T_ref]
+        if any(uh._constraint_registry for uh in self._uh_components):
+            self._sync_to_submodels()
+            for uh in self._uh_components:
+                if uh._constraint_registry:
+                    out.extend(uh.inequality_constraints())
+        return out
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -469,7 +485,7 @@ class RDIIModel(IModel):
                     pass
 
             amp = type(uh)._amplitude_param_name
-            if amp:
+            if amp and getattr(type(uh), "_amplitude_is_fraction", False):
                 try:
                     uh.get_scalar_parameter(amp).value = (
                         self.get_scalar_parameter(f"R_{i}").value
@@ -502,17 +518,23 @@ class RDIIModel(IModel):
 
 
 def _amplitude_default(uh: IUnitHydroComponent) -> float:
-    """Return the default R value from the component's amplitude parameter, else 0.05.
+    """Return the default ``R_i`` for a UH component.
+
+    A component whose amplitude is itself a routed fraction (``RTKTriangle.R``)
+    supplies it; any other component (whose ``A`` is a flow scale, ignored
+    inside ``RDIIModel``) starts at 0.05.
 
     :param uh: Unit hydrograph component to inspect.
     :type uh: IUnitHydroComponent
-    :returns: The component's amplitude parameter value, or ``0.05`` if absent.
+    :returns: Default fraction in ``[0, 1]``.
     :rtype: float
     """
     amp = type(uh)._amplitude_param_name
-    if amp:
+    if amp and getattr(type(uh), "_amplitude_is_fraction", False):
         try:
-            return float(uh.get_scalar_parameter(amp).value)
+            value = float(uh.get_scalar_parameter(amp).value)
         except KeyError:
-            pass
+            return 0.05
+        if 0.0 <= value <= 1.0:
+            return value
     return 0.05

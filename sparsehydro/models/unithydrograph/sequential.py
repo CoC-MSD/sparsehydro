@@ -4,9 +4,10 @@ Uses :class:`~sparsehydro.calibration.CalibrationProblem` for data preparation
 and objective evaluation, and constructs a
 :class:`~sparsehydro.calibration.CalibrationResult` per event.
 
-Warm starting from the previous event's fitted parameters is handled by calling
-``scipy.optimize.minimize`` directly (bypassing ``ScipySolver``, which always
-restarts from the bounds midpoint).
+Each fit starts from the model's current parameter values: the previous
+event's fitted values when warm starting, otherwise the model's defaults. This
+calls ``scipy.optimize.minimize`` directly (``ScipySolver`` always restarts
+from the bounds midpoint).
 """
 
 from __future__ import annotations
@@ -24,7 +25,15 @@ from ...calibration.objectives import RMSE, KGE, NashSutcliffe, WeightedRMSE, IO
 from ...calibration.problem import CalibrationProblem
 from ...calibration.result import CalibrationResult
 from ..base import IModel
+from .kernels import infer_dt_hours_from_values
 from ...events import EventRecord
+
+
+def _start_point(problem: CalibrationProblem, model: IModel) -> np.ndarray:
+    """The model's current values of the calibrated parameters, clipped to bounds."""
+    xl, xu = problem.bounds
+    x0 = np.array([model.read_flat_parameter(name) for name in problem.param_names], dtype=float)
+    return np.clip(x0, xl, xu)
 
 
 def _zonal_weight_vector(event, datetimes, peak_weight: float, tail_weight: float) -> np.ndarray:
@@ -88,6 +97,7 @@ class SequentialFitSummary:
     global_observed: pd.DataFrame
     model_class_name: str
     fitted_effective_areas: list[float]
+    dt_hours: float = 1.0 / 12.0
 
     def parameter_evolution(self) -> pd.DataFrame:
         """Return fitted parameters indexed by event.
@@ -133,7 +143,11 @@ class SequentialFitSummary:
         For an ensemble (aliases like ``fast_A``, ``slow_A``) it is the sum of all
         ``*_A`` parameters — consistent with ``mode="sum"`` and fixed weights of 1.0.
 
-        :returns: Calibrated total ``A`` value per fitted event.
+        ``A`` is a flow per unit rainfall *rate* and does not depend on the time
+        step. It is divided by :attr:`dt_hours` here so the result is on the same
+        per-step scale as the observed effective area ``sum(flow) / sum(rain)``.
+
+        :returns: Calibrated total ``A / dt_hours`` per fitted event.
         :rtype: list[float]
         :raises ValueError: If no ``A``-bearing parameter is found in a
             calibration result.
@@ -147,7 +161,7 @@ class SequentialFitSummary:
                 raise ValueError(
                     f"No 'A' parameter found among calibrated params: {list(params.keys())}"
                 )
-            result.append(float(sum(a_params.values())))
+            result.append(float(sum(a_params.values())) / self.dt_hours)
         return result
 
     def effective_area_summary(self) -> pd.DataFrame:
@@ -270,6 +284,7 @@ class SequentialFitter:
                 global_observed=data[["datetime", "stormflow"]].copy(),
                 model_class_name=self._factory().__class__.__name__,
                 fitted_effective_areas=[],
+                dt_hours=infer_dt_hours_from_values(data["datetime"].values),
             )
 
         datetime_arr = data["datetime"].values
@@ -341,7 +356,7 @@ class SequentialFitter:
                 continue
 
             xl, xu = problem.bounds
-            x0 = np.clip(last_x, xl, xu) if (last_x is not None and last_param_names == problem.param_names) else (xl + xu) / 2.0
+            x0 = _start_point(problem, model_i)
 
             best_x, success = self._optimise(problem, x0, xl, xu, method, obj_idx)
 
@@ -401,6 +416,7 @@ class SequentialFitter:
             global_observed=data[["datetime", "stormflow"]].copy(),
             model_class_name=self._factory().__class__.__name__,
             fitted_effective_areas=fitted_areas,
+            dt_hours=infer_dt_hours_from_values(datetime_arr),
         )
 
     def _optimise(self, problem, x0, xl, xu, method, obj_idx):
@@ -631,7 +647,7 @@ class GlobalSequentialFitter:
                 continue
 
             xl, xu = problem.bounds
-            x0 = np.clip(last_x, xl, xu) if (last_x is not None and last_names == problem.param_names) else (xl + xu) / 2.0
+            x0 = _start_point(problem, model)
             best_x, success = _optimise_problem(problem, x0, xl, xu, method, 0)
 
             all_F = problem.evaluate(best_x).reshape(1, -1)
@@ -676,6 +692,7 @@ class GlobalSequentialFitter:
             global_observed=data[["datetime", "stormflow"]].copy(),
             model_class_name=self._factory().__class__.__name__,
             fitted_effective_areas=fitted_areas,
+            dt_hours=infer_dt_hours_from_values(datetime_arr),
         )
 
 

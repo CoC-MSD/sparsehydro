@@ -28,8 +28,8 @@ jobs:
             echo "::error::Git LFS is not used in this repository."
             status=1
           fi
-          # Files above 1 MiB need a reason; list any agreed exceptions here.
-          allow="tests/golden/predictions.npz"
+          # Files above 1 MiB need a reason; list any agreed exceptions here (one per line).
+          allow=""
           while IFS= read -r -d '' f; do
             size=$(stat -c %s "$f")
             if [ "$size" -gt 1048576 ] && ! grep -qxF "$f" <<< "$allow"; then

@@ -269,7 +269,7 @@ class AbstractionUHModel(IModel):
             self._uh.prepare(
                 pd.DataFrame({"datetime": self._datetime, "rain": effective})
             )
-        q = np.asarray(self._uh.predict_arrays()["Q_pred"], dtype=float)
+        q = np.asarray(self._uh.predict_arrays()[getattr(self._uh, "_output_column", "Q_pred")], dtype=float)
 
         if self._seasonality is not None and self._season_output is not None:
             pf = np.asarray(

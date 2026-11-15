@@ -79,7 +79,7 @@ def build_predictions() -> dict[str, np.ndarray]:
     out: dict[str, np.ndarray] = {}
     for n in C.PREDICT_LENGTHS:
         df = C.rain_series(n)
-        for case_id, model_name, params in C.iter_uh_cases():
+        for case_id, model_name, params in C.predict_cases(n):
             m = C.build(model_name, params)
             m.prepare(df)
             with warnings.catch_warnings():
@@ -109,7 +109,7 @@ def _composite_predictions() -> dict[str, np.ndarray]:
     df = C.rain_series(n)
     df = df.assign(temperature_c=np.full(n, 15.0))
 
-    for label, uh in (("peaktail", PeakTailUH()), ("gamma", GammaUH(A=1.0))):
+    for label, uh in (("peaktail", PeakTailUH(A=20.0)), ("gamma", GammaUH(A=20.0))):
         m = AbstractionUHModel(abstraction=IAModel(), uh=uh)
         m.initialize()
         m.validate()
@@ -289,8 +289,8 @@ def build_evaluate() -> dict[str, np.ndarray]:
         model=m, data=df, objectives=_objectives(),
         column_map={"observed": "obs", "predicted": "Q_pred"}, mask=mask,
     )
-    xs = _peaktail_vectors()
-    for i, x in enumerate(xs):
+    for i, values in enumerate(_peaktail_vectors()):
+        x = np.array([values[name] for name in prob.param_names], dtype=float)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             out[f"PeakTailUH|x{i}"] = prob.evaluate(x, penalty_weight=0.0)
@@ -318,22 +318,21 @@ def build_evaluate() -> dict[str, np.ndarray]:
     return out
 
 
-def _peaktail_vectors() -> list[np.ndarray]:
-    """Return the five fixed PeakTailUH parameter vectors used by the pins.
+def _peaktail_vectors() -> list[dict[str, float]]:
+    """Return the five fixed PeakTailUH parameter sets (times in hours).
 
-    Order matches ``CalibrationProblem.param_names`` for ``PeakTailUH``:
-    ``A, w, td, peak_tp, peak_tt, tail_tt, tail_tp``.
-
-    :returns: List of 7-element parameter vectors.
-    :rtype: list[numpy.ndarray]
+    Given by name so they do not depend on parameter registration order.
+    Vector 4 violates ``peak_Tp_lt_Tb`` so the constraint penalty is pinned.
     """
-    return [
-        np.array([100.0, 0.5, 5.0, 20.0, 50.0, 2.0, 5.0]),
-        np.array([10.0, 0.0, 0.0, 2.0, 5.0, 0.01, 0.01]),      # lower corner
-        np.array([5000.0, 1.0, 200.0, 500.0, 1000.0, 50.0, 500.0]),  # upper corner
-        np.array([250.0, 0.3, 12.0, 40.0, 180.0, 1.5, 45.0]),
-        np.array([80.0, 0.85, 30.0, 100.0, 400.0, 6.0, 150.0]),
+    names = ("A", "w", "td", "peak_Tp", "peak_Tb", "tail_alpha", "tail_theta")
+    rows = [
+        (1.0, 0.5, 0.25, 1.0, 3.0, 2.0, 2.0),
+        (0.1, 0.0, 0.0, 0.05, 0.1, 0.1, 0.01),        # lower corner
+        (500.0, 1.0, 48.0, 240.0, 960.0, 50.0, 240.0),  # upper corner
+        (20.0, 0.3, 1.0, 3.0, 15.0, 2.5, 4.0),
+        (8.0, 0.85, 2.5, 9.0, 6.0, 6.0, 12.0),         # infeasible: Tp > Tb
     ]
+    return [dict(zip(names, row)) for row in rows]
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Tests for the native unit hydrograph models (Rectangle, Decay, GammaDelay, PeakTail)."""
+"""Tests for the classic unit hydrograph models (time parameters in hours)."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def test_kernel_unit_area(cls):
     m.validate()
     kernel = m.get_kernel(DT_HOURS)
     assert np.all(kernel >= 0.0)
-    assert abs(float(np.sum(kernel)) * DT_HOURS - 1.0) < 1e-3
+    assert abs(float(np.sum(kernel)) * DT_HOURS - 1.0) < 1e-9
 
 
 @pytest.mark.parametrize("cls", [RectangleUH, DecayUH, GammaDelayUH, PeakTailUH])
@@ -70,7 +70,7 @@ def test_amplitude_scales_output(cls):
 
 
 def test_rectangle_is_flat():
-    m = RectangleUH(A=1.0, tr=10.0)
+    m = RectangleUH(A=1.0, Tr=10 * DT_HOURS)
     m.initialize()
     m.validate()
     k = m.get_kernel(DT_HOURS)
@@ -79,7 +79,7 @@ def test_rectangle_is_flat():
 
 
 def test_decay_is_monotonic():
-    m = DecayUH(A=1.0, alpha=0.7)
+    m = DecayUH(A=1.0, K=0.25)
     m.initialize()
     m.validate()
     k = m.get_kernel(DT_HOURS)
@@ -87,10 +87,10 @@ def test_decay_is_monotonic():
 
 
 def test_gamma_delay_shifts_peak():
-    base = GammaDelayUH(A=1.0, tt=2.0, tp=5.0, td=0.0)
+    base = GammaDelayUH(A=1.0, alpha=3.0, theta=0.4, td=0.0)
     base.initialize()
     base.validate()
-    delayed = GammaDelayUH(A=1.0, tt=2.0, tp=5.0, td=10.0)
+    delayed = GammaDelayUH(A=1.0, alpha=3.0, theta=0.4, td=10 * DT_HOURS)
     delayed.initialize()
     delayed.validate()
     k0 = base.get_kernel(DT_HOURS)
@@ -101,9 +101,10 @@ def test_gamma_delay_shifts_peak():
 def test_peak_tail_validate_ordering():
     m = PeakTailUH()
     m.initialize()
-    m.get_scalar_parameter("peak_tp").update(value=60.0)
-    m.get_scalar_parameter("peak_tt").update(value=50.0)  # tp >= tt invalid
+    m.get_scalar_parameter("peak_Tp").update(value=5.0)
+    m.get_scalar_parameter("peak_Tb").update(value=4.0)  # Tp > Tb violates peak_Tp_lt_Tb
     assert not m.validate()
+    assert m.inequality_constraints()[0] > 0.0
 
 
 def test_peak_tail_blend_weight():
