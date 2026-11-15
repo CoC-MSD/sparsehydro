@@ -197,3 +197,36 @@ formulation"):
 5. Decorate the class with `@registry.register` and give it a `model_name`.
 
 It can then appear in any composite or configuration file by that name.
+
+## Packaging an extension
+
+A component does not have to live in sparsehydro. Registration happens when
+the module defining the class is imported, so a separate package only has to
+make sure its module gets imported. Declare it in the package's
+`pyproject.toml` under the `sparsehydro.extensions` entry-point group:
+
+```toml
+[project.entry-points."sparsehydro.extensions"]
+my_models = "my_package.models"
+```
+
+The same works for objectives and solvers: register them in that module with
+`objective_registry.add(name, cls)` and `solver_registry.add(name, factory)`.
+
+Applications (the desktop viewer, scripts, notebooks) then call
+{func}`sparsehydro.load_extensions` once before building models by name:
+
+```python
+import sparsehydro
+from sparsehydro.configuration import build_model
+
+report = sparsehydro.load_extensions()          # installed extensions
+report = sparsehydro.load_extensions(["work_in_progress.py"])  # and local files
+print(report.loaded, report.failed)
+
+model = build_model({"type": "my-uh"})
+```
+
+Entry points are imported once per process. A module that fails to import is
+logged and listed in `report.failed` without stopping the others; pass
+`strict=True` to raise instead, for example in a test suite or batch job.

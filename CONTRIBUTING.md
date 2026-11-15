@@ -174,7 +174,10 @@ Then:
 
 1. **Register it** with `@registry.register` and give it a unique,
    lower-case, hyphenated `model_name` (for example `"nash-uh"`). Registered
-   components can be built from configuration.
+   components can be built from configuration. A formulation kept in its own
+   package declares its module in the `sparsehydro.extensions` entry-point
+   group so `sparsehydro.load_extensions()` imports it (see "Packaging an
+   extension" in `docs/composition.md`).
 2. **Use physical units** and state them in each parameter's `units`. Time
    parameters are in hours, not time steps, so results do not depend on the
    model time step.

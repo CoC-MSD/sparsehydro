@@ -23,7 +23,7 @@ import paths mirror the package structure:
    from sparsehydro import (
        IModel, IUnitHydroComponent, ModelState,
        ScalarParameter, VectorParameter, FieldRecord,
-       ModelRegistry, registry,
+       ModelRegistry, registry, load_extensions,
    )
 
    # Everything else via its parent sub-package

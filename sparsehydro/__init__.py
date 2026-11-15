@@ -24,7 +24,7 @@ Example::
 
 from .enums import ModelState
 from .parameters import FieldRecord, ScalarParameter, VectorParameter
-from .registry import ModelRegistry, registry
+from .registry import ModelRegistry, load_extensions, registry
 from .models import IModel, ITorchModel, IUnitHydroComponent
 
 __version__ = "1.0.0a1"
@@ -36,6 +36,7 @@ __all__ = [
     "VectorParameter",
     "ModelRegistry",
     "registry",
+    "load_extensions",
     "IModel",
     "ITorchModel",
     "IUnitHydroComponent",

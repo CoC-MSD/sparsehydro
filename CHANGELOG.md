@@ -67,6 +67,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   so slow that much of the search range predicts almost no flow within the
   data record (`calibration.diagnostics.slow_response_warnings`,
   `UnitHydrographBase.slowest_median_hours`). Default bounds are unchanged.
+- `sparsehydro.load_extensions()` (in `sparsehydro.registry`): imports the
+  modules installed packages declare in the `sparsehydro.extensions`
+  entry-point group, plus any modules or `.py` files passed to it, so models,
+  objectives and solvers defined outside sparsehydro register and can be built
+  by name. Failures are logged and reported instead of raised (or raised with
+  `strict=True`). See "Packaging an extension" in `docs/composition.md`.
 - `tests/test_layering.py` enforces the package layers (see `CONTRIBUTING.md`):
   no upward imports, nothing imports `sparsehydro.studies`, and package
   `__init__` files only re-export.

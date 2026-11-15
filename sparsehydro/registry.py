@@ -13,12 +13,34 @@ Models can self-register at definition time using it as a decorator::
     class LinearReservoir(IModel):
         model_name = "linear-reservoir"
         ...
+
+Extensions
+----------
+Registration happens when the defining module is imported, so components,
+objectives and solvers that live in other packages must be imported before
+they can be built by name. :func:`load_extensions` does that: it imports every
+module an installed package declares in the ``sparsehydro.extensions``
+entry-point group, plus any modules or ``.py`` files passed to it::
+
+    # in the extension's pyproject.toml
+    [project.entry-points."sparsehydro.extensions"]
+    my_models = "my_package.models"
+
+    # in a script, notebook or application
+    from sparsehydro.registry import load_extensions
+    report = load_extensions()
 """
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import inspect
-from typing import TYPE_CHECKING, Any, Iterator
+import logging
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 if TYPE_CHECKING:
     from .models.base import IModel
@@ -260,3 +282,100 @@ class ModelRegistry:
 #: Default module-level registry.  Import and use this instance directly
 #: rather than creating your own unless you need isolation.
 registry: ModelRegistry = ModelRegistry()
+
+
+# ---------------------------------------------------------------------------
+# Extensions
+# ---------------------------------------------------------------------------
+
+#: Entry-point group under which installed packages declare extension modules.
+EXTENSION_GROUP = "sparsehydro.extensions"
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ExtensionReport:
+    """Outcome of :func:`load_extensions` (cumulative over the process).
+
+    :ivar loaded: Entry points (``"name (module)"``) and modules or files imported.
+    :ivar failed: ``(target, "ErrorType: message")`` for every target that raised.
+    """
+
+    loaded: list[str] = field(default_factory=list)
+    failed: list[tuple[str, str]] = field(default_factory=list)
+
+
+_report = ExtensionReport()
+_entry_points_loaded: set[str] = set()
+
+
+def _import_target(target: str | Path) -> None:
+    path = Path(target)
+    if path.suffix == ".py":
+        if not path.is_file():
+            raise FileNotFoundError(str(path))
+        name = f"sparsehydro_extension_{path.stem}"
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    else:
+        importlib.import_module(str(target))
+
+
+def load_extensions(
+    modules: Iterable[str | Path] = (),
+    *,
+    entry_points: bool = True,
+    group: str = EXTENSION_GROUP,
+    strict: bool = False,
+) -> ExtensionReport:
+    """Import extension modules so the models, objectives and solvers they define are registered.
+
+    Entry points are loaded once per process; *modules* are module names
+    (``"my_package.models"``) or paths to ``.py`` files, each imported once.
+    A target that fails is logged and recorded in the report, so one broken
+    extension does not stop the others (pass ``strict=True`` to raise
+    instead, e.g. in tests or batch scripts).
+
+    :param modules: Additional modules or ``.py`` files to import.
+    :param entry_points: Load the entry points declared in *group*.
+    :param group: Entry-point group name.
+    :param strict: Re-raise the first failure.
+    :returns: The cumulative :class:`ExtensionReport` for this process.
+    """
+    targets: list[tuple[str, Any]] = []
+    if entry_points and group not in _entry_points_loaded:
+        from importlib.metadata import entry_points as installed_entry_points
+
+        _entry_points_loaded.add(group)
+        for ep in installed_entry_points(group=group):
+            targets.append((f"{ep.name} ({ep.value})", ep))
+    done = set(_report.loaded) | {t for t, _ in _report.failed}
+    for target in modules:
+        label = str(target)
+        if label.strip() and label not in done:
+            targets.append((label, target))
+            done.add(label)
+    for label, target in targets:
+        try:
+            if hasattr(target, "load"):
+                target.load()
+            else:
+                _import_target(target)
+        except Exception as exc:
+            if strict:
+                raise
+            message = f"{type(exc).__name__}: {exc}"
+            logger.warning("sparsehydro extension %s failed to load: %s", label, message)
+            _report.failed.append((label, message))
+        else:
+            _report.loaded.append(label)
+    return _report
