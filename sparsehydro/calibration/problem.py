@@ -56,44 +56,10 @@ from .objectives import IObjective
 if TYPE_CHECKING:
     from ..models import IModel
 
+from .._columns import ColumnExtractor
+
 # Reserved keys in column_map that specify calibration roles, not column renames.
 _ROLE_KEYS = frozenset({"observed", "predicted", "mask"})
-
-
-class _ColumnExtractor:
-    """Picklable ``(data) -> ndarray`` reader for a single column.
-
-    Binding the column name in a closure would be shorter, but a closure
-    defined inside a function pickles by reference to a name that does not
-    exist at module scope, so it cannot cross a process boundary -- which
-    blocks parallel calibration (``PlatypusSolver(..., n_jobs=...)``), where
-    the problem is shipped to each worker once.  A module-level class pickles
-    as ``(class, state)`` and reconstructs fine.
-
-    :param key: Column to read.
-    :type key: str
-    """
-
-    __slots__ = ("key",)
-
-    def __init__(self, key: str) -> None:
-        self.key = key
-
-    def __call__(self, data: Any) -> np.ndarray:
-        return (
-            data[self.key].to_numpy(dtype=float)
-            if isinstance(data, pd.DataFrame)
-            else np.asarray(data[self.key], dtype=float)
-        )
-
-    def __repr__(self) -> str:
-        return f"_ColumnExtractor({self.key!r})"
-
-    def __getstate__(self) -> str:
-        return self.key
-
-    def __setstate__(self, state: str) -> None:
-        self.key = state
 
 
 def _resolve_extractor(
@@ -119,7 +85,7 @@ def _resolve_extractor(
     if callable(mapping_value):
         return mapping_value
     if isinstance(mapping_value, str):
-        return _ColumnExtractor(mapping_value)
+        return ColumnExtractor(mapping_value, dtype=float)
     raise TypeError(
         f"column_map['{role}'] must be a column name (str) or callable; "
         f"got {type(mapping_value).__name__!r}."

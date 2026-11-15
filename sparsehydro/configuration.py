@@ -22,15 +22,12 @@ from sparsehydro.models.rdii.initial_abstraction import SnowConfig
 from sparsehydro.models.wholeflow_pattern import (
     CenteredWeeklyPattern, ObservedBackground, PatternWholeFlowModel, validate_background_options,
 )
+from sparsehydro._validation import positive_integer as _positive_integer
 from sparsehydro.parameters import ScalarParameter
 
 
 GROUNDWATER_PARAMETERS = ("k_div", "k_G", "g_max", "g_initial_fraction")
 
-
-def _positive_integer(name: str, value: int, minimum: int = 1) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise ValueError(f"{name} must be an integer >= {minimum}")
 
 
 @dataclass(frozen=True)

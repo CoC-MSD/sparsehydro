@@ -44,7 +44,7 @@ Weight bounds: ``[0.0, 2.0]``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -52,39 +52,8 @@ import pandas as pd
 from ..enums import ModelState
 from .base import IModel
 from ..parameters import ConstraintRecord, FieldRecord, ScalarParameter, VectorParameter
+from .._columns import ColumnExtractor
 from ..registry import registry
-
-
-class _ColumnExtractor:
-    """Picklable ``(DataFrame) -> ndarray`` reader for a single column.
-
-    A closure would be the obvious way to bind the column name, but a closure
-    defined inside ``__init__`` pickles by reference to a name that does not
-    exist at module scope, so it cannot cross a process boundary.  That blocks
-    parallel calibration (``PlatypusSolver(..., n_jobs=...)``), which ships the
-    whole problem to each worker once.  A module-level class pickles as
-    ``(class, state)`` and reconstructs fine.
-
-    :param key: Column to read from the child model's ``predict()`` frame.
-    :type key: str
-    """
-
-    __slots__ = ("key",)
-
-    def __init__(self, key: str) -> None:
-        self.key = key
-
-    def __call__(self, df: "pd.DataFrame") -> np.ndarray:
-        return df[self.key].to_numpy()
-
-    def __repr__(self) -> str:
-        return f"_ColumnExtractor({self.key!r})"
-
-    def __getstate__(self) -> str:
-        return self.key
-
-    def __setstate__(self, state: str) -> None:
-        self.key = state
 
 
 @registry.register
@@ -155,7 +124,7 @@ class EnsembleModel(IModel):
         for _, extractor in components:
             if isinstance(extractor, str):
                 self._extractor_keys.append(extractor)
-                self._extractors.append(_ColumnExtractor(extractor))
+                self._extractors.append(ColumnExtractor(extractor))
             elif callable(extractor):
                 self._extractor_keys.append(None)
                 self._extractors.append(extractor)

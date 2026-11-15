@@ -12,21 +12,17 @@ only the existing ``platypus-opt`` dependency.
 from __future__ import annotations
 
 import random
-from numbers import Integral
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from .base import ISolver
+from ..._validation import positive_integer as _positive_integer
 from ..result import CalibrationResult, GenerationRecord
 
 if TYPE_CHECKING:
     from ..problem import CalibrationProblem
 
-
-def _positive_integer(name: str, value: int, minimum: int = 1) -> None:
-    if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
-        raise ValueError(f"{name} must be an integer >= {minimum}")
 
 
 def _in_jupyter_kernel() -> bool:
