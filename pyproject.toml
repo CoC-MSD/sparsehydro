@@ -81,6 +81,7 @@ dev = [
     "pytest-cov",
     "sparsehydro[docs]",
     "sparsehydro[speed]",
+    "sparsehydro[parallel]",
 ]
 
 [project.scripts]

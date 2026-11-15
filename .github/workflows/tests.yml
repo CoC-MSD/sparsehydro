@@ -4,9 +4,41 @@ on:
   push:
     branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No notebooks, Git LFS or large files
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          notebooks=$(git ls-files '*.ipynb')
+          if [ -n "$notebooks" ]; then
+            echo "::error::Notebooks are not kept in the repository (use examples/*.py):"
+            echo "$notebooks"
+            status=1
+          fi
+          if git grep -q "filter=lfs" -- .gitattributes 2>/dev/null; then
+            echo "::error::Git LFS is not used in this repository."
+            status=1
+          fi
+          # Files above 1 MiB need a reason; list any agreed exceptions here.
+          allow="tests/golden/predictions.npz"
+          while IFS= read -r -d '' f; do
+            size=$(stat -c %s "$f")
+            if [ "$size" -gt 1048576 ] && ! grep -qxF "$f" <<< "$allow"; then
+              echo "::error file=$f::$f is $size bytes (limit 1 MiB)."
+              status=1
+            fi
+          done < <(git ls-files -z)
+          exit $status
+
   test:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
