@@ -54,3 +54,7 @@ csvagent.json
 *.ipynb
 .ipynb_checkpoints/
 *.parquet
+
+# Generated outputs (plots, reports, exports) are never committed.
+artifacts/
+**/artifacts/

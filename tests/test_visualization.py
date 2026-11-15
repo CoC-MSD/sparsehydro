@@ -1,7 +1,8 @@
 """Visualization module tests — all functions called with synthetic data.
 
-Artifacts (HTML files) are written to ``tests/artifacts/visualization/`` for
-manual review in a browser.  The directory is created automatically.
+Artifacts (HTML files) are written for manual review in a browser, to
+``$SPARSEHYDRO_TEST_ARTIFACTS/visualization`` when that variable is set and to
+the system temp directory otherwise -- never into the repository.
 
 Run:
     python -m pytest tests/test_visualization.py -v
@@ -9,7 +10,9 @@ Run:
 
 from __future__ import annotations
 
+import os
 import pathlib
+import tempfile
 from typing import List
 
 import numpy as np
@@ -20,7 +23,10 @@ import pytest
 # Artifact output directory
 # ---------------------------------------------------------------------------
 
-ARTIFACTS = pathlib.Path(__file__).parent / "artifacts" / "visualization"
+ARTIFACTS = pathlib.Path(
+    os.environ.get("SPARSEHYDRO_TEST_ARTIFACTS")
+    or pathlib.Path(tempfile.gettempdir()) / "sparsehydro-test-artifacts"
+) / "visualization"
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
