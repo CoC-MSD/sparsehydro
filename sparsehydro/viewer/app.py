@@ -5,7 +5,7 @@ Run with ``sparsehydro-viewer [path/to/rain_stormflow.csv]`` or
 
 Loads a ``rain_stormflow.csv`` (``datetime, rain, stormflow``), runs
 :func:`~sparsehydro.events.detect_event_hierarchy` and
-:class:`~sparsehydro.models.unithydrograph.GlobalSequentialFitter` once per
+:class:`~sparsehydro.calibration.GlobalSequentialFitter` once per
 (file, settings) pair, and steps through global events in four views:
 Overview, Smoothing, UH Shape and Convolution.
 """

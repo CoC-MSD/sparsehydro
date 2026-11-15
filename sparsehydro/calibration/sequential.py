@@ -21,12 +21,12 @@ from scipy.optimize import Bounds, minimize as scipy_minimize
 from scipy.optimize import differential_evolution
 from scipy.signal import savgol_filter
 
-from ...metrics.objectives import RMSE, KGE, NashSutcliffe, WeightedRMSE, IObjective
-from ...calibration.problem import CalibrationProblem
-from ...calibration.result import CalibrationResult
-from ..base import IModel
-from .kernels import infer_dt_hours_from_values
-from ...events import EventRecord
+from ..events import EventRecord
+from ..metrics.objectives import RMSE, KGE, NashSutcliffe, WeightedRMSE, IObjective
+from ..models.base import IModel
+from ..models.unithydrograph.kernels import infer_dt_hours_from_values
+from .problem import CalibrationProblem
+from .result import CalibrationResult
 
 
 def _start_point(problem: CalibrationProblem, model: IModel) -> np.ndarray:

@@ -46,7 +46,6 @@ from .models import DecayUH, GammaDelayUH, GammaUH, NashUH, RectangleUH, Triangl
 from .peak_tail import PeakTailUH
 from .rtk import RTKTriangle, triangular_uh
 from .synthetic import SCSUH, SnyderUH
-from .sequential import GlobalSequentialFitter, SequentialFitSummary, SequentialFitter
 
 __all__ = [
     "UnitHydrographBase",
@@ -67,7 +66,4 @@ __all__ = [
     "DecayUH",
     "RTKTriangle",
     "triangular_uh",
-    "SequentialFitter",
-    "SequentialFitSummary",
-    "GlobalSequentialFitter",
 ]

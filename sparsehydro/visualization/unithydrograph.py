@@ -27,7 +27,7 @@ from ..events.records import SubEventRecord, GlobalEvent
 from ..events.smoothing import VariableSavgolResult
 from ..filters import FilterResult
 from ..models.base import IUnitHydroComponent
-from ..models.unithydrograph.sequential import SequentialFitSummary
+from ..calibration.sequential import SequentialFitSummary
 
 _D3 = [
     "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",

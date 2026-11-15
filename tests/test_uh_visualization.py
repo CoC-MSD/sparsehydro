@@ -8,9 +8,8 @@ pytest.importorskip("plotly")
 import plotly.graph_objects as go  # noqa: E402
 
 from sparsehydro.events import detect_event_hierarchy  # noqa: E402
-from sparsehydro.models.unithydrograph import (  # noqa: E402
-    GammaUH, RectangleUH, PeakTailUH, SequentialFitter,
-)
+from sparsehydro.calibration import SequentialFitter  # noqa: E402
+from sparsehydro.models.unithydrograph import GammaUH, PeakTailUH, RectangleUH  # noqa: E402
 from sparsehydro.visualization import (  # noqa: E402
     plot_variable_savgol, plot_event_hierarchy, plot_uh_shapes, plot_convolution,
     plot_effective_area,

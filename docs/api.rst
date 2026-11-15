@@ -323,7 +323,7 @@ equations, the table of formulations and how to add one.
 Sequential Fitting
 ~~~~~~~~~~~~~~~~~~
 
-:class:`~sparsehydro.models.unithydrograph.sequential.SequentialFitter` fits a fresh
+:class:`~sparsehydro.calibration.sequential.SequentialFitter` fits a fresh
 model instance to each storm event in chronological order, warm-starting from
 the previous event's calibrated parameters (the first event starts from the
 model's default values).  The predicted flow from each
@@ -336,7 +336,8 @@ UH models and :class:`~sparsehydro.models.EnsembleModel` composites:
 
 .. code-block:: python
 
-   from sparsehydro.models.unithydrograph import GammaUH, SequentialFitter
+   from sparsehydro.calibration import SequentialFitter
+   from sparsehydro.models.unithydrograph import GammaUH
    from sparsehydro.models import EnsembleModel
 
    # Single model
@@ -364,7 +365,7 @@ UH models and :class:`~sparsehydro.models.EnsembleModel` composites:
    print(summary.metrics_summary())        # RMSE, NSE, KGE per event
    print(summary.parameter_evolution())    # fitted params per event
 
-.. automodule:: sparsehydro.models.unithydrograph.sequential
+.. automodule:: sparsehydro.calibration.sequential
    :members:
    :show-inheritance:
 

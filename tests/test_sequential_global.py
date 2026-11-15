@@ -7,8 +7,9 @@ import pandas as pd
 import pytest
 
 from sparsehydro.calibration import WeightedRMSE
+from sparsehydro.calibration import GlobalSequentialFitter, SequentialFitSummary, SequentialFitter
 from sparsehydro.models.unithydrograph import (
-    GammaUH, SequentialFitter, SequentialFitSummary, GlobalSequentialFitter,
+    GammaUH,
 )
 
 

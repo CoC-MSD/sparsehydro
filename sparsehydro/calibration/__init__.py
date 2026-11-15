@@ -109,6 +109,7 @@ from ..metrics.objectives import (
     DisjointWindowCCC,
 )
 from .problem import CalibrationProblem
+from .sequential import GlobalSequentialFitter, SequentialFitSummary, SequentialFitter
 from .result import CalibrationResult, GenerationRecord, _identify_pareto
 from .solvers import ISolver, NSGAIISolver, PlatypusCmaEsSolver, ParticleSwarmSolver, PlatypusSolver, ScipySolver
 from .splits import (
@@ -160,4 +161,7 @@ __all__ = [
     "wrap_seasonal_slip_days",
     # Callbacks
     "ProgressCallback",
+    "SequentialFitter",
+    "SequentialFitSummary",
+    "GlobalSequentialFitter",
 ]

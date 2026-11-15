@@ -28,7 +28,7 @@ from ..events import (
 from ..events.hierarchy import GLOBAL_EVENT_GAP_DAYS
 from ..metrics.functions import nash_sutcliffe
 from ..models.base import IModel
-from ..models.unithydrograph import GlobalSequentialFitter, SequentialFitSummary
+from ..calibration.sequential import GlobalSequentialFitter, SequentialFitSummary
 
 REQUIRED_COLUMNS = ("datetime", "rain", "stormflow")
 
