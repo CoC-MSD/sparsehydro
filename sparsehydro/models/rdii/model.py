@@ -332,9 +332,16 @@ class RDIIModel(IModel):
             if T_freeze >= T_ref:
                 return False
 
+        # RDIIModel owns the forwarded UH parameters and their bounds, so only the
+        # components' own constraints and structural checks apply here.
         self._sync_to_submodels()
-        if not all(uh.validate() for uh in self._uh_components):
-            return False
+        for uh in self._uh_components:
+            residuals = getattr(uh, "_constraint_residuals", None)
+            if residuals is None:
+                if not uh.validate():
+                    return False
+            elif any(g > 0.0 for g in residuals()) or not uh._extra_valid():
+                return False
 
         self._state = ModelState.VALIDATED
         return True

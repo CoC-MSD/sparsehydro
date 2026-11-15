@@ -20,6 +20,7 @@ abstraction stage of :class:`~sparsehydro.models.AbstractionUHModel`.
 """
 
 from .external import ExternalExcess
+from .soil_groundwater import SoilGroundwaterStore
 from .tank import (
     ConstantDrainTank,
     LinearDrainTank,
@@ -29,6 +30,7 @@ from .tank import (
 
 __all__ = [
     "ExternalExcess",
+    "SoilGroundwaterStore",
     "TankAbstractionModel",
     "ConstantDrainTank",
     "LinearDrainTank",

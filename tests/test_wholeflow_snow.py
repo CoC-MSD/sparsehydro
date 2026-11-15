@@ -12,7 +12,7 @@ import pytest
 
 from sparsehydro.calibration.wholeflow_workflow import dry_weather_mask, melt_scoring_mask, snow_melt_envelope
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
-from sparsehydro.models.wholeflow import _gwi_B_core
+from sparsehydro.models.abstraction.soil_groundwater import soil_groundwater_core as _gwi_B_core
 from sparsehydro.models.wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
 
 
@@ -199,7 +199,6 @@ def test_notebook_spinup_snow_is_continuous_and_masks_are_melt_aware(calibrate_s
 @pytest.mark.parametrize("kind", ["compact", "pattern"])
 @pytest.mark.parametrize("dt", [1 / 12, .25, 1.0])
 def test_bounded_snow_candidates_refresh_without_reprepare(kind, dt, monkeypatch):
-    from sparsehydro.models import wholeflow_compact
     from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel, SanitaryTemplate
 
     def build(config, calibrate):
@@ -220,14 +219,16 @@ def test_bounded_snow_candidates_refresh_without_reprepare(kind, dt, monkeypatch
     assert model.get_scalar_parameter("snow_T").upper_bound == 3
     assert model.get_scalar_parameter("snow_ddf").lower_bound == .005
     assert model.get_scalar_parameter("snow_ddf").upper_bound == .5
+    from sparsehydro.models.forcing import snow as snow_module
+
     calls = []
-    partition = wholeflow_compact.snow_partition
+    partition = snow_module.snow_partition
 
     def counted(*args):
         calls.append(args[-1])
         return partition(*args)
 
-    monkeypatch.setattr(wholeflow_compact, "snow_partition", counted)
+    monkeypatch.setattr(snow_module, "snow_partition", counted)
     n = int(120 / dt)
     rain = np.zeros(n)
     rain[[1, int(25 / dt), int(60 / dt)]] = [.5, .2, .3]

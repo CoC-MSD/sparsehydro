@@ -1,272 +1,271 @@
-"""Observation-free sanitary template + explicit shared GWI/three-RTK model.
+"""Whole-flow presets: snow -> soil/groundwater store -> RDII routing + sanitary baseline.
 
-The inherited parameter registry and triangle bounds match WholeFlowModel.
-The inherited G-cap spill is retained and reported, not a new groundwater source.
-Only the sanitary level is jointly fitted; the normalized template is frozen.
+``total_cfs = sanitary + GWI + RDII``. A whole-flow model is a
+:class:`~sparsehydro.models.composite.CompositeModel` of registered components:
+
+=============  ==========================================  ======================
+Component      Class                                       Provides
+=============  ==========================================  ======================
+``snow``       :class:`~sparsehydro.models.forcing.DegreeDaySnow`  liquid input, SWE
+``store``      :class:`~sparsehydro.models.abstraction.SoilGroundwaterStore`  excess, GWI
+``rdii``       :class:`~sparsehydro.models.rdii.RDIIModel` with RTK triangles  RDII
+``baseline``   a sanitary baseline component               sanitary flow
+=============  ==========================================  ======================
+
+:class:`CompactWholeFlowModel` uses a fixed sanitary template;
+:class:`~sparsehydro.models.wholeflow_pattern.PatternWholeFlowModel` uses
+fitted weekly patterns (optionally with an observed background). Both keep
+the parameter names, order, bounds and outputs of the original classes, check
+the forcing strictly, and close the whole-system water budget every
+prediction (``budget``).
+
+The same model can be written as configuration; these classes are presets.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal, overload
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
-from scipy.signal import fftconvolve
 
-from sparsehydro.enums import ModelState
-from sparsehydro.parameters import FieldRecord, ScalarParameter
-from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
-from sparsehydro.models.wholeflow import J_INIT_RTK, WholeFlowModel, _g_at_cap, _gwi_B_core
-from sparsehydro.units import ACRE_INCH_TO_FT3
+from sparsehydro.models.abstraction import ExternalExcess
+from sparsehydro.models.abstraction.soil_groundwater import (  # noqa: F401 - legacy names
+    SoilGroundwaterStore, g_at_cap as _g_at_cap, soil_groundwater_core as _gwi_B_core,
+)
+from sparsehydro.models.baseflow import SanitaryTemplate, SanitaryTemplateModel
+from sparsehydro.models.base import IModel
+from sparsehydro.models.composite import CompositeModel
+from sparsehydro.models.forcing import DegreeDaySnow, SnowConfig
+from sparsehydro.models.rdii import RDIIModel
+from sparsehydro.models.unithydrograph.rtk import RTKTriangle
+from sparsehydro.registry import registry
 
+__all__ = ["CompactWholeFlowModel", "SanitaryTemplate", "J_INIT_RTK", "J_T_BOUNDS", "J_K_BOUNDS",
+           "SUPER_SLOW_RTK", "SUPER_SLOW_T_BOUNDS"]
 
-@dataclass(frozen=True)
-class SanitaryTemplate:
-    """24 hourly and 7 weekday factors; 29 independent normalized shape values."""
+# Initial (R, T[hr], K) and search bounds for fast / medium / slow / very slow pathways.
+J_INIT_RTK = [(0.03, 1.0, 2.0), (0.02, 8.0, 2.5), (0.01, 48.0, 3.0)]
+J_T_BOUNDS = [(0.1, 6.0), (2.0, 48.0), (12.0, 120.0)]
+J_K_BOUNDS = (1.05, 4.0)
+SUPER_SLOW_RTK = (0.005, 168.0, 3.0)
+SUPER_SLOW_T_BOUNDS = (96.0, 720.0)
 
-    hourly: tuple[float, ...]
-    weekday: tuple[float, ...]
-
-    def __post_init__(self) -> None:
-        for values, size in ((self.hourly, 24), (self.weekday, 7)):
-            a = np.asarray(values)
-            if a.shape != (size,) or not np.all(np.isfinite(a)) or np.any(a < 0):
-                raise ValueError("Template factors must be finite, nonnegative and complete")
-            if not np.isclose(a.mean(), 1.0):
-                raise ValueError("Each template dimension must have mean one")
-
-    def predict(self, datetimes: pd.Series | pd.DatetimeIndex) -> np.ndarray:
-        t = pd.DatetimeIndex(datetimes)
-        return np.asarray(self.hourly)[t.hour] * np.asarray(self.weekday)[t.dayofweek]
-
+_STORE_PARAMETERS = ("s_max", "ia_k_dep", "ia_k0", "ia_kT", "ia_theta", "ia_T_ref", "ia_T_freeze",
+                     "k_div", "k_G", "g_max", "area_acres")
+_SNOW_OUTPUTS = ("snowfall_in", "rain_liquid_in", "melt_in", "liquid_input_in", "SWE_in")
 
 
+class WholeFlowPreset(CompositeModel):
+    """Common machinery of the whole-flow presets (not registered).
 
-class _TemplateTerm:
-    def __init__(self, template: SanitaryTemplate, level: float, upper: float):
-        self.template = template
-        self.level = level
-        self.upper = upper
-        self.values: np.ndarray | None = None
-
-    def register(self, model: WholeFlowModel) -> None:
-        model.register_scalar_parameter(ScalarParameter(
-            "sanitary_level_cfs", self.level, 0.0, self.upper, units="cfs",
-            description="Jointly calibrated mean sanitary level over a reference week",
-        ))
-
-    def prepare(self, datetimes: pd.DatetimeIndex) -> None:
-        self.values = self.template.predict(datetimes)
-
-    def evaluate(self, model: WholeFlowModel) -> np.ndarray:
-        if self.values is None:
-            raise RuntimeError("Prepare the sanitary template before prediction")
-        return float(model.get_scalar_parameter("sanitary_level_cfs").value) * self.values
-
-
-class CompactWholeFlowModel(WholeFlowModel):
-    """One vector, no observation-derived fitting inside prepare/predict.
-
-    Fixed ia_k_dep=5 and ia_theta=0.08 reduce two free coefficients. kT remains
-    calibrated for the initial temperature-aware model; a training-only kT=0
-    comparison tests simpler recovery. S0 and G0 are bounded fractions of capacity.
-    Snow is fixed/off by default; calibrate_snow adds bounded snow_T/snow_ddf.
+    :param baseline: Sanitary baseline component.
+    :param area_acres: Contributing area.
+    :param dt_hours: Model time step; forcing must be on this regular grid.
+    :param snow_config: Snow settings (``None``: no snow).
+    :param calibrate_snow: Calibrate ``snow_T`` and ``snow_ddf``.
+    :param groundwater_enabled: Use the deep groundwater store.
+    :param init_rtk: ``(R, T, K)`` per RTK pathway.
+    :param background: Optional component providing ``background_cfs`` to the
+        baseline's ``level_cfs`` input.
+    :param store_overrides: Extra parameter overrides for store parameters.
     """
 
-    model_name = "wholeflow-compact"
-
-    def __init__(
-        self, template: SanitaryTemplate, area_acres: float, dt_hours: float,
-        level_cfs: float, level_upper_cfs: float, *, snow_config: SnowConfig | None = None,
-        calibrate_snow: bool = False, groundwater_enabled: bool = True,
-        init_rtk: tuple[tuple[float, float, float], ...] | None = None,
-    ):
+    def __init__(self, baseline: IModel, area_acres: float, dt_hours: float, *,
+                 snow_config: SnowConfig | None, calibrate_snow: bool, groundwater_enabled: bool,
+                 init_rtk, background: IModel | None = None,
+                 store_overrides: Mapping[str, Mapping[str, Any]] | None = None) -> None:
         if not (np.isfinite(area_acres) and area_acres > 0 and np.isfinite(dt_hours) and dt_hours > 0):
             raise ValueError("Area and timestep must be positive and finite")
-        if not (0 <= level_cfs <= level_upper_cfs and np.isfinite(level_upper_cfs)):
-            raise ValueError("Invalid sanitary level bounds")
         if calibrate_snow and snow_config is None:
             raise ValueError("Snow calibration requires an enabled SnowConfig")
-        super().__init__(np.zeros(1), area_acres, dt_hours,
-                         J_INIT_RTK if init_rtk is None else init_rtk,
-                         sanitary_mode="offset", groundwater_enabled=groundwater_enabled,
-                         sanitary_term=_TemplateTerm(template, level_cfs, level_upper_cfs))
-        self._snow_config = snow_config
+        if not isinstance(groundwater_enabled, bool):
+            raise ValueError("groundwater_enabled must be a boolean")
+        init_rtk = list(init_rtk)
+        if not init_rtk:
+            raise ValueError("Whole-flow models require at least one RTK triangle")
+        self._dt_hours = float(dt_hours)
+        self.groundwater_enabled = groundwater_enabled
         self._calibrate_snow = calibrate_snow
-        self._snow_forcing: pd.DataFrame | None = None
-        self._snow_forcing_config: SnowConfig | None = None
+        self._snow_config = snow_config
+        self._init = init_rtk
         self.budget: dict[str, float] = {}
+
+        snow = DegreeDaySnow(snow_config, calibrate=calibrate_snow,
+                             threshold_bounds=(-2.0, 3.0), melt_factor_bounds=(0.005, 0.5))
+        store = SoilGroundwaterStore(area_acres, groundwater=groundwater_enabled)
+        rdii = RDIIModel(ia_model=ExternalExcess(),
+                         uh_components=[RTKTriangle(R=R, T=T, K=K) for R, T, K in init_rtk],
+                         component_outputs=True)
+        components: dict[str, IModel] = {"snow": snow, "store": store, "rdii": rdii}
+        bindings = {"store.liquid_input_in": "snow.liquid_input_in",
+                    "rdii.p_excess_in": "store.p_excess_in"}
+        if background is not None:
+            components["background"] = background
+            bindings["baseline.level_cfs"] = "background.background_cfs"
+        components["baseline"] = baseline
+
+        t_bounds = (*J_T_BOUNDS, SUPER_SLOW_T_BOUNDS)
+        overrides: dict[str, dict[str, Any]] = {}
+        for i in range(1, len(init_rtk) + 1):
+            lo, hi = t_bounds[min(i - 1, len(t_bounds) - 1)]
+            overrides[f"uh{i}_T"] = {"lower_bound": lo, "upper_bound": hi}
+            overrides[f"uh{i}_K"] = {"lower_bound": J_K_BOUNDS[0], "upper_bound": J_K_BOUNDS[1]}
+        for name, opts in (store_overrides or {}).items():
+            overrides.setdefault(name, {}).update(opts)
+
+        self._baseline_parameters = self._baseline_parameter_names(baseline)
+        order = [*_STORE_PARAMETERS, *self._baseline_parameters]
+        for i in range(1, len(init_rtk) + 1):
+            order += [f"R_{i}", f"uh{i}_T", f"uh{i}_K"]
+        if calibrate_snow:
+            order += ["snow_T", "snow_ddf"]
+        order += ["s_initial_fraction", "g_initial_fraction"]
+
+        outputs: dict[str, Any] = {
+            "S_in": "store.S_in", "G_in": "store.G_in", "G_at_cap": "store.G_at_cap",
+            "excess_in": "store.p_excess_in", "recharge_in": "store.recharge_in",
+            "et_in": "store.et_in", "gwi_release_in": "store.gwi_release_in",
+            "gwi_spill_in": "store.gwi_spill_in", "sanitary_cfs": "baseline.sanitary_cfs",
+            "gwi_cfs": "store.gwi_cfs", "rdii_cfs": "rdii.rdii_cfs", "rdii_in": "rdii.rdii_in",
+            "gwi_in": "store.gwi_in",
+            "baseflow_cfs": ["baseline.sanitary_cfs", "store.gwi_cfs"],
+            "total_cfs": ["baseline.sanitary_cfs", "store.gwi_cfs", "rdii.rdii_cfs"],
+            **{f"rtk{i}_cfs": f"rdii.rdii_component_{i}" for i in range(1, len(init_rtk) + 1)},
+            **{name: f"snow.{name}" for name in _SNOW_OUTPUTS},
+        }
+        super().__init__(components, bindings=bindings, outputs=outputs,
+                         prefixes={name: "" for name in components},
+                         shared={"area_acres": ["store.area_acres", "rdii.area_acres"]},
+                         parameter_overrides=overrides, parameter_order=order)
+
+    @staticmethod
+    def _baseline_parameter_names(baseline: IModel) -> list[str]:
+        baseline.initialize()
+        return list(baseline.scalar_parameter_names)
+
+    # -- compatibility properties ------------------------------------------
+    @property
+    def n_triangles(self) -> int:
+        return len(self._init)
 
     @property
     def snow_config(self) -> SnowConfig | None:
-        """Effective snow settings, including the current calibrated coefficients."""
-        config = self._snow_config
-        if config is None or not self._calibrate_snow or "snow_T" not in self.scalar_parameter_names:
-            return config
-        return SnowConfig(
-            threshold_c=float(self.get_scalar_parameter("snow_T").value),
-            melt_factor_in_per_c_day=float(self.get_scalar_parameter("snow_ddf").value),
-            initial_swe_in=config.initial_swe_in,
-        )
+        """Effective snow settings, including calibrated coefficients."""
+        return self.component("snow").effective_config
 
-    def initialize(self) -> None:
-        super().initialize()
-        if self._calibrate_snow:
-            config = self._snow_config
-            if config is None:
-                raise ValueError("Snow calibration requires an enabled SnowConfig")
-            for name, value, lower, upper, units, description in (
-                ("snow_T", config.threshold_c, -2.0, 3.0, "degC",
-                 "Joint rain/snow partition threshold and degree-day melt base"),
-                ("snow_ddf", config.melt_factor_in_per_c_day, 0.005, 0.5, "in/degC/day",
-                 "Degree-day melt factor; initial SWE remains fixed"),
-            ):
-                if not lower <= value <= upper:
-                    raise ValueError(f"{name} initial value must lie within [{lower}, {upper}]")
-                self.register_scalar_parameter(ScalarParameter(
-                    name, value, lower, upper, units=units, description=description,
-                ))
-        for name in ("ia_k_dep", "ia_theta"):
-            self.get_scalar_parameter(name).calibrate = False
-        for name in ("s_initial_fraction", "g_initial_fraction"):
-            self.register_scalar_parameter(ScalarParameter(
-                name, 0.0 if name == "g_initial_fraction" and not self.groundwater_enabled else 0.5,
-                0.0, 1.0, units="-",
-                description="Initial storage / capacity; explicit antecedent-water assumption",
-                calibrate=name != "g_initial_fraction" or self.groundwater_enabled,
-            ))
-        for name, units in (
-            ("et_in", "in"), ("recharge_in", "in"), ("gwi_release_in", "in"),
-            ("gwi_spill_in", "in"), ("unrouted_excess_in", "in"),
-            ("routing_storage_in", "in"), ("budget_error_in", "in"),
-            ("snowfall_in", "in"), ("rain_liquid_in", "in"), ("melt_in", "in"),
-            ("liquid_input_in", "in"), ("SWE_in", "in"),
-        ):
-            self.register_output_field(FieldRecord(name=name, units=units))
-        for i in range(1, len(self._tri) + 1):
-            self.register_output_field(FieldRecord(name=f"rtk{i}_cfs", units="cfs"))
+    @property
+    def _snow_forcing(self) -> pd.DataFrame | None:
+        snow = self.component("snow")
+        if snow._rain is None:
+            return None
+        return pd.DataFrame(snow.partition())
 
+    # -- lifecycle ----------------------------------------------------------
     def validate(self) -> bool:
-        return (super().validate()
-                and (self.groundwater_enabled
-                     or self.get_scalar_parameter("g_initial_fraction").value == 0)
-                and all(x <= 0 for x in self.inequality_constraints()))
+        return super().validate() and all(g <= 0 for g in self.inequality_constraints())
 
-    def prepare(self, data: pd.DataFrame) -> None:
-        required = ["datetime", self._rain_col, self._temp_col]
+    def prepare(self, data: pd.DataFrame, **child_kwargs: Mapping[str, Any]) -> None:
+        """Check the forcing strictly, then prepare the components.
+
+        :raises ValueError: Unless ``datetime``, ``rainfall_in`` and
+            ``temperature_c`` are complete, rain is nonnegative, and timestamps
+            are unique, ascending and on the configured time step.
+        """
+        required = ["datetime", "rainfall_in", "temperature_c"]
         if not set(required).issubset(data):
             raise ValueError(f"Prediction requires only {required}")
-        df = data[required].reset_index(drop=True).copy()
+        keep = required + [c for c in ("background_required",) if c in data]
+        df = data[keep].reset_index(drop=True).copy()
         t = pd.DatetimeIndex(df["datetime"])
         if len(t) < 2 or t.hasnans or not t.is_monotonic_increasing or t.has_duplicates:
             raise ValueError("Forcing must have unique ascending timestamps")
         if not np.allclose(np.diff(t.as_unit("ns").asi8) / 3.6e12, self._dt_hours):
             raise ValueError("Forcing must be on the configured regular timestep")
-        rain, temp = df[self._rain_col].to_numpy(float), df[self._temp_col].to_numpy(float)
+        rain = df["rainfall_in"].to_numpy(float)
+        temp = df["temperature_c"].to_numpy(float)
         if not np.all(np.isfinite(rain)) or np.any(rain < 0) or not np.all(np.isfinite(temp)):
             raise ValueError("Rain and temperature must be complete; rain must be nonnegative")
-        self._df, self._rain, self._temp = df, rain, temp
-        self._snow_forcing = None
-        self._refresh_snow_forcing()
-        self.sanitary.prepare(t)
-        self._state = ModelState.PREPARED
+        self._rain = rain
+        super().prepare(df, **child_kwargs)
 
-    def _refresh_snow_forcing(self) -> None:
-        config = self.snow_config
-        if self._snow_forcing is None or config != self._snow_forcing_config:
-            self._snow_forcing = snow_partition(self._rain, self._temp, self._dt_hours, config)
-            self._snow_forcing_config = config
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """All components plus the whole-system budget columns.
 
-    def predict(self) -> pd.DataFrame:
-        """Return the complete diagnostic prediction."""
-        return self._predict(diagnostics=True)
-
-    def predict_total_cfs(self) -> np.ndarray:
-        """Return total flow only, retaining identical physics and budget checks.
-
-        The float64 array follows the prepared forcing order, including warmup.
-        No diagnostic dataframe or per-component cfs arrays are constructed.
-        ``budget`` and model state are updated just as in ``predict()``.
+        :raises ValueError: Before :meth:`prepare` or with infeasible parameters.
+        :raises ArithmeticError: If the water budget does not close within 1e-8 in.
         """
-        return self._predict(diagnostics=False)
-
-    @overload
-    def _predict(self, *, diagnostics: Literal[True]) -> pd.DataFrame: ...
-
-    @overload
-    def _predict(self, *, diagnostics: Literal[False]) -> np.ndarray: ...
-
-    def _predict(self, *, diagnostics: bool) -> pd.DataFrame | np.ndarray:
-        if self._df is None or self._snow_forcing is None or not self.validate():
+        if self._datetime is None or not self.validate():
             raise ValueError("Prepare forcing and provide physically feasible parameters first")
-        self._refresh_snow_forcing()
-        g = lambda name: float(self.get_scalar_parameter(name).value)
-        s0 = g("s_initial_fraction") * g("s_max")
-        g0 = g("g_initial_fraction") * g("g_max")
-        snow0 = self.snow_config.initial_swe_in if self.snow_config is not None else 0.0
-        liquid = self._snow_forcing["liquid_input_in"].to_numpy()
-        swe = self._snow_forcing["SWE_in"].to_numpy()
-        s, groundwater, excess, et, gwi = _gwi_B_core(
-            liquid, self._temp, self._dt_hours,
-            g("s_max"), g("ia_k_dep"), g("ia_k0"), g("ia_kT"), g("ia_theta"),
-            g("ia_T_ref"), g("ia_T_freeze"), g("k_div"), g("k_G"), g("g_max"),
-            s0, g0,
-        )
-        step_cfs = g("area_acres") * ACRE_INCH_TO_FT3 / (self._dt_hours * 3600)
-        n = len(excess)
-        routed = np.zeros(n)
-        components = {}
-        for i, tri in enumerate(self._tri, 1):
-            tri.get_scalar_parameter("T").value = g(f"uh{i}_T")
-            tri.get_scalar_parameter("K").value = g(f"uh{i}_K")
-            weights = tri.get_kernel(self._dt_hours) * self._dt_hours
-            full = fftconvolve(excess, weights) * g(f"R_{i}")
-            tolerance = 1e-12 * max(1.0, float(excess.sum()))
-            if full.min() < -tolerance:
-                raise ArithmeticError("Material negative routed rainfall")
-            full = np.maximum(full, 0.0)
-            component = full[:n]
-            routed += component
-            if diagnostics:
-                components[f"rtk{i}_cfs"] = component * step_cfs
-        fraction = sum(g(f"R_{i}") for i in range(1, len(self._tri) + 1))
+        out = super().predict_arrays()
+        store, snow = self.component("store"), self.component("snow")
+        s0, g0 = store.initial_storage
+        config = snow.effective_config
+        snow0 = config.initial_swe_in if config is not None else 0.0
+        excess, routed = out["excess_in"], out.pop("rdii_in")
+        fraction = sum(self._scalar_parameters[f"R_{i}"].value for i in range(1, self.n_triangles + 1))
         routing_storage = np.cumsum(excess * fraction - routed)
         unrouted = excess * (1 - fraction)
-        error = s0 + g0 + snow0 + np.cumsum(self._rain - et - gwi - routed - unrouted)
-        error -= s + groundwater + routing_storage + swe
-        sanitary = self.sanitary.evaluate(self)
-        total_cfs = sanitary + (gwi + routed) * step_cfs
+        gwi = out.pop("gwi_in")
+        error = s0 + g0 + snow0 + np.cumsum(self._rain - out["et_in"] - gwi - routed - unrouted)
+        error -= out["S_in"] + out["G_in"] + routing_storage + out["SWE_in"]
         self.budget = {
             "initial_storage_in": s0 + g0 + snow0, "rain_in": float(self._rain.sum()),
-            "initial_snow_in": snow0, "final_snow_in": float(swe[-1]),
-            "snowfall_in": float(self._snow_forcing["snowfall_in"].sum()),
-            "melt_in": float(self._snow_forcing["melt_in"].sum()),
-            "liquid_input_in": float(liquid.sum()),
-            "et_in": float(et.sum()), "gwi_in": float(gwi.sum()),
+            "initial_snow_in": snow0, "final_snow_in": float(out["SWE_in"][-1]),
+            "snowfall_in": float(out["snowfall_in"].sum()), "melt_in": float(out["melt_in"].sum()),
+            "liquid_input_in": float(out["liquid_input_in"].sum()),
+            "et_in": float(out["et_in"].sum()), "gwi_in": float(gwi.sum()),
             "rdii_in": float(routed.sum()), "unrouted_in": float(unrouted.sum()),
-            "final_soil_in": float(s[-1]), "final_gwi_in": float(groundwater[-1]),
+            "final_soil_in": float(out["S_in"][-1]), "final_gwi_in": float(out["G_in"][-1]),
             "final_routing_in": float(routing_storage[-1]),
             "max_abs_error_in": float(np.abs(error).max()),
         }
         if self.budget["max_abs_error_in"] > 1e-8 or routing_storage.min() < -1e-8:
             raise ArithmeticError("Rainfall subsystem budget did not close within 1e-8 inch")
-        out: pd.DataFrame | np.ndarray
-        if diagnostics:
-            release = groundwater * np.expm1(g("k_G") * self._dt_hours)
-            spill = gwi - release
-            out = pd.DataFrame({
-                "datetime": self._df["datetime"], "S_in": s, "G_in": groundwater,
-                "G_at_cap": _g_at_cap(groundwater, g("g_max"), g("k_G"), self._dt_hours),
-                "excess_in": excess, "recharge_in": liquid - excess, "et_in": et,
-                "gwi_release_in": release, "gwi_spill_in": spill,
-                "unrouted_excess_in": unrouted, "routing_storage_in": routing_storage,
-                "budget_error_in": error, "sanitary_cfs": sanitary, "gwi_cfs": gwi * step_cfs,
-                "rdii_cfs": routed * step_cfs, "baseflow_cfs": sanitary + gwi * step_cfs,
-                "total_cfs": total_cfs, **components,
-                **{name: self._snow_forcing[name].to_numpy() for name in self._snow_forcing},
-            })
-        else:
-            out = total_cfs
-        self._state = ModelState.PREDICTED
-        return out
+        ordered = {name: out[name] for name in (
+            "datetime", "S_in", "G_in", "G_at_cap", "excess_in", "recharge_in", "et_in",
+            "gwi_release_in", "gwi_spill_in")}
+        ordered.update(unrouted_excess_in=unrouted, routing_storage_in=routing_storage,
+                       budget_error_in=error)
+        ordered.update({name: out[name] for name in out if name not in ordered})
+        return ordered
+
+    def predict_total_cfs(self) -> np.ndarray:
+        """Total flow only (the same computation and budget check as :meth:`predict`)."""
+        return self.predict_arrays()["total_cfs"]
+
+
+@registry.register
+class CompactWholeFlowModel(WholeFlowPreset):
+    """Whole-flow model with a fixed sanitary template and a calibrated level.
+
+    ``ia_k_dep`` and ``ia_theta`` are fixed; initial S and G are calibrated
+    fractions of capacity (G fixed at 0 without groundwater).
+
+    :param template: Normalised hourly x weekday sanitary template.
+    :param area_acres: Contributing area.
+    :param dt_hours: Model time step [hr].
+    :param level_cfs: Initial sanitary level [cfs].
+    :param level_upper_cfs: Upper bound of the sanitary level [cfs].
+    """
+
+    model_name = "wholeflow-compact"
+
+    def __init__(self, template: SanitaryTemplate, area_acres: float, dt_hours: float,
+                 level_cfs: float, level_upper_cfs: float, *, snow_config: SnowConfig | None = None,
+                 calibrate_snow: bool = False, groundwater_enabled: bool = True,
+                 init_rtk: tuple[tuple[float, float, float], ...] | None = None):
+        if not (0 <= level_cfs <= level_upper_cfs and np.isfinite(level_upper_cfs)):
+            raise ValueError("Invalid sanitary level bounds")
+        self.template = template
+        store_overrides = {
+            "ia_k_dep": {"calibrate": False}, "ia_theta": {"calibrate": False},
+            "s_initial_fraction": {"value": 0.5, "calibrate": True},
+            "g_initial_fraction": ({"value": 0.5, "calibrate": True} if groundwater_enabled
+                                   else {"value": 0.0, "calibrate": False}),
+        }
+        super().__init__(SanitaryTemplateModel(template, level_cfs, level_upper_cfs),
+                         area_acres, dt_hours, snow_config=snow_config,
+                         calibrate_snow=calibrate_snow, groundwater_enabled=groundwater_enabled,
+                         init_rtk=J_INIT_RTK if init_rtk is None else init_rtk,
+                         store_overrides=store_overrides)

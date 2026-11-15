@@ -17,12 +17,12 @@ import time
 import numpy as np
 import pandas as pd
 
-import sparsehydro.models.wholeflow as _physics_module
+import sparsehydro.models.abstraction.soil_groundwater as _physics_module
 import sparsehydro.models.wholeflow_pattern as _pattern_module
 from sparsehydro.configuration import StudySettings
 from sparsehydro.units import MGD_TO_CFS
 from sparsehydro.data.utilities import write_tsf
-from sparsehydro.models.wholeflow import _HAS_NUMBA, _gwi_B_core
+from sparsehydro.models.abstraction.soil_groundwater import HAS_NUMBA as _HAS_NUMBA, soil_groundwater_core as _gwi_B_core
 from sparsehydro.models.wholeflow_pattern import PatternEstimate, PatternWholeFlowModel
 from .msdgc_assessment import MSDGCAssessment
 from .msdgc_pareto import MSDGC_METRIC_ORDER, rank_msdgc_pareto

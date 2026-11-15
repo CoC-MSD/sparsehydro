@@ -112,26 +112,31 @@ def test_both_paths_enforce_preparation_and_feasibility(make_model, method):
 
 @pytest.mark.parametrize("method", ["predict", "predict_total_cfs"])
 def test_both_paths_reject_injected_mass_balance_error(make_model, method, monkeypatch):
+    from sparsehydro.models.abstraction import soil_groundwater
+
     model = make_model(snow=True)
     model.prepare(forcing())
-    core = wholeflow_compact._gwi_B_core
+    core = soil_groundwater.soil_groundwater_core
 
     def broken_core(*args):
         s, groundwater, excess, et, gwi = core(*args)
         return s + .001, groundwater, excess, et, gwi
 
-    monkeypatch.setattr(wholeflow_compact, "_gwi_B_core", broken_core)
-    with pytest.raises(ArithmeticError, match="budget"):
+    monkeypatch.setattr(soil_groundwater, "soil_groundwater_core", broken_core)
+    with pytest.raises(ArithmeticError, match="mass balance|budget"):
         getattr(model, method)()
 
 
 @pytest.mark.parametrize("method", ["predict", "predict_total_cfs"])
 def test_both_paths_reject_negative_routing(make_model, method, monkeypatch):
+    """Routing more water than the excess supplies drives routing storage negative."""
+    from sparsehydro.models.rdii import model as rdii_module
+
     model = make_model()
     model.prepare(forcing())
-    monkeypatch.setattr(wholeflow_compact, "fftconvolve",
-                        lambda excess, weights: np.full(len(excess), -1.0))
-    with pytest.raises(ArithmeticError, match="negative routed"):
+    monkeypatch.setattr(rdii_module, "convolve_causal",
+                        lambda excess, kernel, n_out: np.full(n_out, 10.0))
+    with pytest.raises(ArithmeticError, match="budget"):
         getattr(model, method)()
 
 

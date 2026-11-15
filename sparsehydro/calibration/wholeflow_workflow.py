@@ -12,7 +12,6 @@ from sparsehydro.calibration.objectives import Con15
 from sparsehydro.calibration.result import CalibrationResult, GenerationRecord
 from sparsehydro.calibration.wholeflow_acceptance import AcceptanceEvaluator, lin_ccc
 from sparsehydro.events.msdgc import find_events
-from sparsehydro.models.wholeflow import WholeFlowModel
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
 from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel
 
@@ -116,7 +115,7 @@ def frozen_events(
 
 
 
-def parameter_table(model: WholeFlowModel) -> pd.DataFrame:
+def parameter_table(model) -> pd.DataFrame:
     rows = []
     for name in model.scalar_parameter_names:
         p = model.get_scalar_parameter(name)

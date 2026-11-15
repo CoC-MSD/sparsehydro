@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from sparsehydro.models.wholeflow import _gwi_B_core
+from sparsehydro.models.abstraction.soil_groundwater import soil_groundwater_core as _gwi_B_core
 
 
 @pytest.mark.parametrize("dt", [1 / 12, 0.25, 1.0])

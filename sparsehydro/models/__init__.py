@@ -1,37 +1,53 @@
-"""sparsehydro.models — model interfaces, generic models, and domain sub-packages.
+"""sparsehydro.models — model interfaces, components and composition.
 
 Sub-packages
 ------------
-- :mod:`sparsehydro.models.rdii` — RDII physics models (IAModel, RDIIModel, RTKTriangle)
-- :mod:`sparsehydro.models.unithydrograph` — native unit hydrograph implementations
-- :mod:`sparsehydro.models.abstraction` — rainfall-abstraction (tank) models
+- :mod:`sparsehydro.models.unithydrograph` — unit hydrograph library
+- :mod:`sparsehydro.models.rdii` — initial abstraction and RDII routing
+- :mod:`sparsehydro.models.abstraction` — abstraction stores (tanks, soil/groundwater, external excess)
+- :mod:`sparsehydro.models.forcing` — forcing pre-processing (degree-day snow)
+- :mod:`sparsehydro.models.baseflow` — sanitary/dry-weather baselines and their pre-fit estimators
 
 Interfaces
 ----------
-- :class:`~sparsehydro.models.IModel` — abstract lifecycle interface for all models
-- :class:`~sparsehydro.models.IUnitHydroComponent` — extension for UH kernel models
-- :class:`~sparsehydro.models.ITorchModel` — optional PyTorch-compatible interface
+- :class:`IModel` — lifecycle interface for all models
+- :class:`IUnitHydroComponent` — extension for unit hydrograph kernels
+- :class:`ITorchModel` — optional PyTorch-compatible interface
 
-Generic models
---------------
-- :class:`~sparsehydro.models.EnsembleModel` — weighted multi-model compositor
-- :class:`~sparsehydro.models.SeasonalityModel` — discrete peaking-factor seasonal flow model
+Composition
+-----------
+- :class:`CompositeModel` — named components wired by bindings, with combined outputs
+- :class:`EnsembleModel` — weighted sum or product of models on the same data
+- Presets: :class:`AbstractionUHModel`, :class:`CompactWholeFlowModel`,
+  :class:`PatternWholeFlowModel`
+
+Every concrete model is registered by name; see :data:`sparsehydro.registry`.
 """
 
 from .base import IModel, IUnitHydroComponent
 from .amm import AMMModel
 from .ensemble import EnsembleModel
 from .seasonality import SeasonalityModel
-from .composite import AbstractionUHModel
-from .rdii.initial_abstraction import SnowConfig
-from .wholeflow_compact import CompactWholeFlowModel, SanitaryTemplate
-from .wholeflow_pattern import CenteredWeeklyPattern, PatternWholeFlowModel
+from .composite import AbstractionUHModel, CompositeModel
+from .forcing import DegreeDaySnow, SnowConfig
 from .abstraction import (
     TankAbstractionModel,
     ConstantDrainTank,
     LinearDrainTank,
     SqrtDrainTank,
+    ExternalExcess,
+    SoilGroundwaterStore,
 )
+from .baseflow import (
+    CenteredWeeklyPattern,
+    CenteredWeeklyPatternModel,
+    ObservedBackground,
+    ObservedBackgroundModel,
+    SanitaryTemplate,
+    SanitaryTemplateModel,
+)
+from .wholeflow_compact import CompactWholeFlowModel
+from .wholeflow_pattern import PatternWholeFlowModel
 
 __all__ = [
     "IModel",
@@ -39,16 +55,24 @@ __all__ = [
     "AMMModel",
     "EnsembleModel",
     "SeasonalityModel",
+    "CompositeModel",
     "AbstractionUHModel",
+    "DegreeDaySnow",
     "SnowConfig",
-    "CompactWholeFlowModel",
-    "SanitaryTemplate",
-    "CenteredWeeklyPattern",
-    "PatternWholeFlowModel",
     "TankAbstractionModel",
     "ConstantDrainTank",
     "LinearDrainTank",
     "SqrtDrainTank",
+    "ExternalExcess",
+    "SoilGroundwaterStore",
+    "CenteredWeeklyPattern",
+    "CenteredWeeklyPatternModel",
+    "ObservedBackground",
+    "ObservedBackgroundModel",
+    "SanitaryTemplate",
+    "SanitaryTemplateModel",
+    "CompactWholeFlowModel",
+    "PatternWholeFlowModel",
     "ITorchModel",
 ]
 

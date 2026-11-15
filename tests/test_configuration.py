@@ -74,19 +74,6 @@ def test_existing_constructor_defaults_are_numerically_unchanged():
     pd.testing.assert_frame_equal(legacy.predict(), explicit.predict(), check_exact=True)
 
 
-def test_current_model_bypasses_retired_sanitary_construction(monkeypatch):
-    from sparsehydro.models import wholeflow
-
-    def retired(*args, **kwargs):
-        raise AssertionError("Current construction used the retired sanitary fitter")
-
-    monkeypatch.setattr(wholeflow, "_SanitaryTerm", retired)
-    model = build()
-    model.prepare(forcing())
-    assert model.validate()
-    assert np.isfinite(model.predict_total_cfs()).all()
-
-
 @pytest.mark.parametrize("n_triangles", [4, 5, 12])
 def test_all_pathways_participate_in_sum_r_constraint(n_triangles):
     model = build(StudySettings(model=ModelSettings(n_triangles=n_triangles, seasonal_baseline="off")))
@@ -169,10 +156,10 @@ def test_direct_pattern_constructor_rejects_invalid_triangle_counts(n_triangles)
 
 
 def test_wholeflow_constructor_rejects_empty_triangle_definitions():
-    from sparsehydro.models.wholeflow import WholeFlowModel
+    from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel, SanitaryTemplate
 
     with pytest.raises(ValueError, match="at least one RTK triangle"):
-        WholeFlowModel(np.ones(2), 20.26, 1., [], sanitary_mode="offset")
+        CompactWholeFlowModel(SanitaryTemplate((1.0,) * 24, (1.0,) * 7), 20.26, 1., .5, 2., init_rtk=())
 
 
 def test_parameter_selection_and_fixed_values_reach_calibration_problem():
