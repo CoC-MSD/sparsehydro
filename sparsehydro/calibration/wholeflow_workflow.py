@@ -443,8 +443,6 @@ def passing_pareto_metrics(
     passing = pareto_solutions.loc[pareto_solutions["filter_pass"].fillna(False)]
     if passing.empty:
         return pd.DataFrame(columns=columns)
-    if any(evaluator.contract.qcritical_cfs is not None for evaluator in evaluators.values()):
-        raise ValueError("Passing Pareto reporting requires Qcritical-free report contracts")
     worker = copy.deepcopy(model)
     rows = []
     for candidate in passing.itertuples():

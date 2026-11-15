@@ -443,7 +443,7 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
         acceptance = pd.read_csv(tmp_path / "acceptance.csv")
         assert set(acceptance.metric) == set(MSDGCAssessment.report_metric_names)
         assert "metric_label" not in acceptance.columns
-        assert metadata["acceptance"]["qcritical_cfs"] is None
+        assert "qcritical_cfs" not in metadata["acceptance"]
         assert metadata["conveyance_report"]["aggregation"].startswith("CCC across event")
         assert metadata["msdgc_assessment"]["official_storm_scorecard"] is False
         assert metadata["con15_basis"] == "msdgc_independent_conveyance_volume_mg"

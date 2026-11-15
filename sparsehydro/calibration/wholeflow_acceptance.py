@@ -9,16 +9,25 @@ import math
 import numpy as np
 import pandas as pd
 
+from .objectives import _concordance_correlation_coefficient
+
 
 def lin_ccc(observed: np.ndarray, modeled: np.ndarray) -> float:
-    """Population-moment CCC; incomplete or degenerate pairs are undefined."""
+    """Lin's CCC for reporting: incomplete or degenerate pairs give NaN.
+
+    Uses the same formula as the ``ccc`` calibration objective
+    (:class:`~sparsehydro.calibration.objectives.ConcordanceCorrelationCoefficient`),
+    which raises instead of returning NaN.
+    """
     x, y = np.asarray(observed, float), np.asarray(modeled, float)
     if x.shape != y.shape:
         raise ValueError("CCC arrays must align")
     if x.size < 2 or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
         return math.nan
-    denominator = x.var() + y.var() + (x.mean() - y.mean()) ** 2
-    return float(2 * np.mean((x - x.mean()) * (y - y.mean())) / denominator) if denominator > 0 else math.nan
+    try:
+        return _concordance_correlation_coefficient(x, y)
+    except ValueError:  # zero denominator
+        return math.nan
 
 
 @dataclass(frozen=True)
@@ -27,11 +36,8 @@ class AcceptanceContract:
     con15_tolerance: float = 0.10
     top_fraction: float = 0.15
     version: str = "total-events-conveyance-volume-v2"
-    qcritical_cfs: None = None
 
     def __post_init__(self) -> None:
-        if self.qcritical_cfs is not None:
-            raise ValueError("Qcritical thresholds are retired from this total-flow workflow")
         if not (0 < self.ccc_min <= 1 and 0 < self.top_fraction <= 1 and self.con15_tolerance > 0):
             raise ValueError("Invalid acceptance tolerances")
 
