@@ -23,6 +23,7 @@ import streamlit as st
 
 from sparsehydro.events.hierarchy import GLOBAL_EVENT_GAP_DAYS
 from sparsehydro.models.unithydrograph import GammaUH, NashUH, PeakTailUH, TriangleUH
+from sparsehydro.sample_data import sample_path
 from sparsehydro.viewer.data import (
     SEASON_ORDER,
     ViewerResult,
@@ -64,14 +65,13 @@ SORT_COLUMNS = {
 
 def _default_path() -> str:
     """Initial CSV path: ``$SPARSEHYDRO_VIEWER_CSV``, else the command line
-    (``streamlit run app.py -- <path>``), else the in-repo sample if present."""
+    (``streamlit run app.py -- <path>``), else the bundled TC-NB-001 sample."""
     if os.environ.get("SPARSEHYDRO_VIEWER_CSV"):
         return os.environ["SPARSEHYDRO_VIEWER_CSV"]
     args = [a for a in sys.argv[1:] if a.lower().endswith(".csv")]
     if args:
         return args[0]
-    sample = Path("data/TC-NB-001/rain_stormflow.csv")
-    return str(sample) if sample.exists() else ""
+    return str(sample_path("tc-nb-001"))
 
 
 @st.cache_resource(show_spinner=False, max_entries=4)

@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from sparsehydro.models.unithydrograph import PeakTailUH
+from sparsehydro.sample_data import sample_path
 from sparsehydro.viewer import cli
 from sparsehydro.viewer.data import (
     ViewerResult,
@@ -29,15 +30,13 @@ from sparsehydro.viewer.data import (
 )
 
 REPO = Path(__file__).resolve().parents[1]
-SAMPLE_CSV = REPO / "data" / "TC-NB-001" / "rain_stormflow.csv"
+SAMPLE_CSV = sample_path("tc-nb-001")
 APP_PATH = REPO / "sparsehydro" / "viewer" / "app.py"
-
-pytestmark = pytest.mark.skipif(not SAMPLE_CSV.exists(), reason="sample dataset not present")
 
 
 @pytest.fixture(scope="module")
 def sample_df() -> pd.DataFrame:
-    """Two weeks of the in-repo TC-NB-001 record (a handful of events; fits in ~1 s)."""
+    """Two weeks of the bundled TC-NB-001 sample (a handful of events; fits in ~1 s)."""
     full = read_rain_stormflow(SAMPLE_CSV)
     return full[(full["datetime"] >= "2022-03-01") & (full["datetime"] < "2022-03-15")].reset_index(drop=True)
 

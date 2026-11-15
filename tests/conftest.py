@@ -17,7 +17,6 @@ from sparsehydro.data.utilities import read_tsf
 
 DATA_DIR = Path(__file__).parent / "data"
 MUUM_DIR = DATA_DIR / "MU-UM-019"
-AIR_TEMP_CSV = DATA_DIR / "air_temperature.csv"
 
 MGD_TO_CFS = 1.5472286
 # Bounded window (~3 weeks) with several storms — keeps fitting tests quick.
@@ -35,21 +34,9 @@ def _load_rain_stormflow() -> pd.DataFrame:
     return df
 
 
-def _load_temperature() -> pd.DataFrame:
-    """Load the air-temperature CSV as ``datetime`` (naive local) + ``temperature_c``."""
-    temp = pd.read_csv(AIR_TEMP_CSV, comment="#")
-    temp["Date_Time"] = (
-        pd.to_datetime(temp["Date_Time"], utc=True)
-        .dt.tz_convert("US/Eastern")
-        .dt.tz_localize(None)
-    )
-    temp = temp[["Date_Time", "air_temp_set_1"]].dropna().sort_values("Date_Time")
-    return temp.rename(columns={"Date_Time": "datetime", "air_temp_set_1": "temperature_c"})
-
-
 @pytest.fixture(scope="session")
 def muum019_full() -> pd.DataFrame:
-    """Full MU-UM-019 rain + stormflow (CFS) series."""
+    """MU-UM-019 rain + stormflow (CFS); the repo keeps 2022-07-01 to 2022-07-23 only."""
     return _load_rain_stormflow()
 
 
@@ -59,17 +46,6 @@ def muum019_window(muum019_full: pd.DataFrame) -> pd.DataFrame:
     df = muum019_full
     mask = (df["datetime"] >= WINDOW[0]) & (df["datetime"] <= WINDOW[1])
     return df.loc[mask].reset_index(drop=True)
-
-
-@pytest.fixture(scope="session")
-def muum019_window_temp(muum019_window: pd.DataFrame) -> pd.DataFrame:
-    """MU-UM-019 window with an aligned ``temperature_c`` column (°C)."""
-    temp = _load_temperature()
-    merged = pd.merge_asof(
-        muum019_window.sort_values("datetime"), temp, on="datetime", direction="nearest"
-    )
-    merged["temperature_c"] = merged["temperature_c"].astype(float)
-    return merged.reset_index(drop=True)
 
 
 @pytest.fixture(scope="session")
