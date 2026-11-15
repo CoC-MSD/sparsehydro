@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from sparsehydro.visualization.display import thin_for_display
-from sparsehydro.visualization.wholeflow_presentation import plot_wholeflow_presentation
+from sparsehydro.studies.msdgc.plots import plot_wholeflow_presentation
 
 
 @pytest.fixture

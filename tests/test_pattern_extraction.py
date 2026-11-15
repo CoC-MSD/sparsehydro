@@ -199,7 +199,7 @@ def test_optional_diagnostics_are_self_contained_and_preserve_budget():
     from sparsehydro.models.forcing import SnowConfig
     from sparsehydro.models.baseflow import CenteredWeeklyPattern
     from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
-    from sparsehydro.visualization.wholeflow_diagnostics import (
+    from sparsehydro.visualization.wholeflow import (
         plot_baseflow_components, plot_snow_diagnostics, plot_water_balance,
     )
 

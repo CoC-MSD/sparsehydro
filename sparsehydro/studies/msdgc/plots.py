@@ -1,4 +1,4 @@
-"""Presentation figures from an already selected whole-flow prediction."""
+"""MSDGC study figures: Pareto metrics, candidate diagnostics, the presentation figure."""
 
 from __future__ import annotations
 
@@ -9,6 +9,10 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+from sparsehydro.calibration.result import CalibrationResult
+from sparsehydro.studies.msdgc.pareto import MSDGC_METRIC_ORDER
+from sparsehydro.visualization.calibration import plot_pareto_scatter_matrix
 
 
 def _shade(
@@ -231,3 +235,89 @@ def plot_wholeflow_presentation(
         "03_warmup_training_validation": zones,
         "04_selected_storm_windows": storms,
     }
+
+
+def plot_msdgc_pareto(result: CalibrationResult, metrics: pd.DataFrame) -> tuple[go.Figure, go.Figure, pd.DataFrame]:
+    """Plot final training objectives and summarize every candidate's whole-flow metric spread."""
+    _msd_whole = metrics.loc[metrics.window.eq('whole')]
+    _msd_labels = ['Conveyance CCC', 'Storage CCC', 'Treatment CCC',
+                   'Three-zone mean CCC', 'Event-volume CCC', 'Con15 slope']
+
+    if len(result.objective_names) > 1:
+        msd_front_fig = plot_pareto_scatter_matrix(
+            result, title='Final Pareto front - configured TRAINING objectives')
+        msd_front_fig.update_traces(
+            customdata=np.arange(len(result.pareto_X)),
+            hovertemplate='Pareto %{customdata}<br>x=%{x:.4f}<br>y=%{y:.4f}<extra></extra>')
+    else:
+        print('Single-objective result: one final optimum is not a multiobjective trade-off front.')
+        msd_front_fig = go.Figure(go.Scatter(
+            x=result.objective_display_values()[:, 0],
+            y=np.arange(len(result.pareto_X)), mode='markers',
+            marker=dict(size=12), name='Final candidate',
+            hovertemplate='Pareto %{y}<br>Objective=%{x:.5f}<extra></extra>'))
+        msd_front_fig.update_layout(
+            title='Single-objective final candidate (no multiobjective front)',
+            xaxis_title=result.objective_names[0], yaxis_title='Pareto index')
+    msd_front_fig.update_layout(template='plotly_white')
+
+    msd_spread_fig = go.Figure()
+    _msd_spread_rows = []
+    for _metric, _label in zip(MSDGC_METRIC_ORDER, _msd_labels):
+        _part = _msd_whole.loc[_msd_whole.metric.eq(_metric)]
+        _defined = _part.loc[np.isfinite(_part.value) & _part.status.ne('undefined')]
+        _bounds = _part[['lower', 'upper']].drop_duplicates()
+        if len(_bounds) != 1:
+            raise ValueError(f'Inconsistent whole-flow bounds for {_metric}')
+        _lower, _upper = _bounds.iloc[0]
+        _quantiles = _defined.value.quantile([0, .25, .5, .75, 1])
+        _msd_spread_rows.append(dict(
+            metric=_metric, lower=_lower, upper=_upper, candidates=len(_part),
+            defined=len(_defined), undefined=len(_part) - len(_defined),
+            passes=int(_part.status.eq('pass').sum()),
+            minimum=_quantiles.loc[0], q25=_quantiles.loc[.25], median=_quantiles.loc[.5],
+            q75=_quantiles.loc[.75], maximum=_quantiles.loc[1]))
+        msd_spread_fig.add_trace(go.Box(
+            name=_label, y=_defined.value, boxpoints='all', jitter=.25, pointpos=0,
+            customdata=_defined.pareto_index, marker=dict(size=5),
+            hovertemplate='Pareto %{customdata}<br>%{y:.5f}<extra>%{fullData.name}</extra>'))
+        msd_spread_fig.add_shape(type='rect', xref='x', yref='y',
+            x0=len(_msd_spread_rows) - 1.45, x1=len(_msd_spread_rows) - .55,
+            y0=_lower, y1=_upper, fillcolor='rgba(44,160,44,0.12)', line_width=0, layer='below')
+    msd_spread_fig.add_hline(y=1., line_dash='dot', line_color='gray')
+    msd_spread_fig.update_layout(
+        template='plotly_white', height=550, width=1400, showlegend=False,
+        title='Final Pareto candidates - WHOLE total-flow MSDGC spread (green = accepted band)',
+        yaxis_title='CCC / Con15 slope',
+        xaxis=dict(categoryorder='array', categoryarray=_msd_labels))
+    msd_whole_spread = pd.DataFrame(_msd_spread_rows)
+    print('Full-event-volume CCC is diagnostic; the three-zone mean is not a substitute for each zone passing.')
+    return msd_front_fig, msd_spread_fig, msd_whole_spread
+
+
+def plot_msdgc_diagnostic(data: pd.DataFrame, predictions: pd.DataFrame, *, warmup_mask: np.ndarray, data_title: str, index: int, status: str) -> go.Figure:
+    """Plot a diagnostic candidate without warmup; unscored observations remain gaps."""
+    _msd_record = ~warmup_mask
+    _msd_time = pd.to_datetime(data.datetime)
+    _msd_observed = predictions["observed_cfs"].to_numpy()
+    msd_diagnostic_fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, row_heights=[.25, .75], vertical_spacing=.07,
+        subplot_titles=('Rainfall (native model timestep)', 'Observed vs modeled TOTAL flow'))
+    msd_diagnostic_fig.add_trace(go.Scattergl(
+        x=_msd_time[_msd_record], y=data.rainfall_in[_msd_record],
+        name='Rainfall', mode='lines', fill='tozeroy', line=dict(color='#1f77b4', width=.6)), row=1, col=1)
+    msd_diagnostic_fig.add_trace(go.Scattergl(
+        x=_msd_time[_msd_record], y=_msd_observed[_msd_record], name='Observed total flow',
+        mode='lines', connectgaps=False, line=dict(color='black', width=1)), row=2, col=1)
+    msd_diagnostic_fig.add_trace(go.Scattergl(
+        x=_msd_time[_msd_record], y=predictions["modeled_cfs"].to_numpy()[_msd_record], name='Modeled total flow',
+        mode='lines', line=dict(color='#d62728', width=1.2)), row=2, col=1)
+    #add_val_vrects(msd_diagnostic_fig, _msd_time, row=2, col=1)
+    msd_diagnostic_fig.update_yaxes(title_text='Rain [in/step]', autorange='reversed', row=1, col=1)
+    msd_diagnostic_fig.update_yaxes(title_text='Flow [cfs]', row=2, col=1)
+    msd_diagnostic_fig.update_xaxes(title_text='Date (fixed EST)', row=2, col=1)
+    msd_diagnostic_fig.update_layout(
+        template='plotly_white', height=750, width=1500, hovermode='x unified',
+        title=f'{data_title} - diagnostic Pareto {index}: {status}',
+        legend=dict(orientation='h', yanchor='bottom', y=1.05, x=0))
+    return msd_diagnostic_fig

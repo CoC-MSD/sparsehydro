@@ -41,7 +41,6 @@ RDII-specific functions additionally require::
 
 try:
     from .timeseries import (
-        VisualizationModel,
         plot_calibration_timeseries,
         plot_cumulative_volume,
         plot_data_explorer,
@@ -65,7 +64,6 @@ try:
     from .seasonality import plot_seasonality_components
     from .dashboard import plot_calibration_dashboard
     from .display import add_val_vrects, thin_for_display
-    from .wholeflow_presentation import plot_wholeflow_presentation
     from .unithydrograph import (
         plot_rainfall_flow_with_events,
         plot_filter_signals,
@@ -80,9 +78,6 @@ try:
     )
 
 except ImportError:
-
-    def plot_wholeflow_presentation(*args, **kwargs):
-        raise ImportError("plotly is required for plot_wholeflow_presentation. Install with: pip install plotly")
 
     def plot_timeseries(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_timeseries. Install with: pip install plotly")
@@ -181,30 +176,13 @@ except ImportError:
     def plot_one_to_one_band(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_one_to_one_band. Install with: pip install plotly")
 
-    from ..models import IModel as _IModel  # noqa: E402
 
-    class VisualizationModel(_IModel):  # type: ignore[no-redef]
-        model_name = "visualization"
-
-        def initialize(self) -> None:
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
-        def validate(self) -> bool:  # type: ignore[return]
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
-        def prepare(self, data, **kwargs) -> None:
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
-        def predict(self):  # type: ignore[return]
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
-        def finalize(self) -> None:
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
+from .model import VisualizationModel
 
 __all__ = [
     # Time-domain
     "plot_timeseries",
+    "plot_calibration_timeseries",
     "plot_residuals_scatter",
     "plot_cumulative_volume",
     "plot_data_explorer",
@@ -228,7 +206,6 @@ __all__ = [
     "plot_seasonality_components",
     # Dashboard
     "plot_calibration_dashboard",
-    "plot_wholeflow_presentation",
     # Display helpers
     "thin_for_display",
     "add_val_vrects",
