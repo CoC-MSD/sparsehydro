@@ -139,7 +139,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/MSDGC-SWM/sparsehydro",
+            "url": "https://github.com/CoC-MSD/sparsehydro",
             "icon": "fa-brands fa-github",
             "type": "fontawesome",
         },

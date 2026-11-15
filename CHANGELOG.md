@@ -68,4 +68,4 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 - Expanded calibration objectives and solver support for weighted and multi-objective workflows.
 - Improved time-series parsing and plotting performance for large monitoring datasets.
 
-[1.0.0a2]: https://github.com/MSDGC-SWM/sparsehydro/releases/tag/v1.0.0a2
+[1.0.0a2]: https://github.com/CoC-MSD/sparsehydro/releases/tag/v1.0.0a2

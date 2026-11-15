@@ -18,7 +18,6 @@ maintainers = [
     { name = "Caleb Buahin", email = "cbuahin@hazenandsawyer.com" },
     { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
     { name = "Filipe Romero", email = "felipe.romero@cincinnati-oh.gov" },
-    { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
     { name = "William Abbey", email = "william.abbey@cincinnati-oh.gov" },
     { name = "Sebastian Otarola-Bustos", email = "SOtarolaBustos@hazenandsawyer.com" },
     { name = "Mickey Tadese", email = "MTadesse@hazenandsawyer.com" },
@@ -88,10 +87,11 @@ dev = [
 sparsehydro-viewer = "sparsehydro.viewer.cli:main"
 
 [project.urls]
-Homepage = "https://coc-msd.github.io/SparseHydro/#documentation"
-Repository = "https://github.com/MSDGC-SWM/sparsehydro"
-Documentation = "https://MSDGC-SWM.github.io/sparsehydro"
-Issues = "https://github.com/MSDGC-SWM/sparsehydro/issues"
+Homepage = "https://github.com/CoC-MSD/sparsehydro"
+Repository = "https://github.com/CoC-MSD/sparsehydro"
+Documentation = "https://coc-msd.github.io/SparseHydro/"
+Issues = "https://github.com/CoC-MSD/sparsehydro/issues"
+Changelog = "https://github.com/CoC-MSD/sparsehydro/blob/main/CHANGELOG.md"
 
 [tool.hatch.build]
 exclude = [

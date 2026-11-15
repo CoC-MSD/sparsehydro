@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://coc-msd.github.io/SparseHydro/
+    about: Check the user guide and API reference first.
+  - name: Code of Conduct concerns
+    url: https://github.com/CoC-MSD/sparsehydro/blob/main/CODE_OF_CONDUCT.md#reporting-an-issue
+    about: Report conduct issues privately by email, not in a public issue.

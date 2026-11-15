@@ -3,8 +3,8 @@
 **sparsehydro** provides abstract interfaces and utilities for building *parsimonious*
 (sparse-parameter) hydrological models in Python, with a focus on stormwater systems.
 
-[![Tests](https://github.com/MSDGC-SWM/sparsehydro/actions/workflows/tests.yml/badge.svg)](https://github.com/MSDGC-SWM/sparsehydro/actions/workflows/tests.yml)
-[![Docs](https://github.com/MSDGC-SWM/sparsehydro/actions/workflows/docs.yml/badge.svg)](https://MSDGC-SWM.github.io/sparsehydro)
+[![Tests](https://github.com/CoC-MSD/sparsehydro/actions/workflows/tests.yml/badge.svg)](https://github.com/CoC-MSD/sparsehydro/actions/workflows/tests.yml)
+[![Docs](https://github.com/CoC-MSD/sparsehydro/actions/workflows/docs.yml/badge.svg)](https://coc-msd.github.io/SparseHydro/)
 [![PyPI](https://img.shields.io/pypi/v/sparsehydro)](https://pypi.org/project/sparsehydro/)
 [![Python](https://img.shields.io/pypi/pyversions/sparsehydro)](https://pypi.org/project/sparsehydro/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -245,18 +245,21 @@ pip install sparsehydro
 
 Optional extras:
 
-| Extra     | Command                            | Enables                                   |
-| --------- | ---------------------------------- | ----------------------------------------- |
-| `rdii`    | `pip install sparsehydro[rdii]`    | RDII model (pymoo + scipy)                |
-| `platypus`| `pip install sparsehydro[platypus]`| Full Platypus algorithm suite + PSO       |
-| `torch`   | `pip install sparsehydro[torch]`   | Gradient-based calibration via PyTorch    |
-| `docs`    | `pip install sparsehydro[docs]`    | Sphinx documentation build                |
-| `all`     | `pip install sparsehydro[all]`     | All optional extras                       |
+| Extra      | Command                               | Enables                                              |
+| ---------- | ------------------------------------- | ---------------------------------------------------- |
+| `speed`    | `pip install "sparsehydro[speed]"`    | Numba-compiled store kernels (much faster calibration) |
+| `parallel` | `pip install "sparsehydro[parallel]"` | Parallel CMA-ES seeds via joblib                     |
+| `excel`    | `pip install "sparsehydro[excel]"`    | Reading `.xlsx` event files                          |
+| `viewer`   | `pip install "sparsehydro[viewer]"`   | `sparsehydro-viewer` Streamlit app                   |
+| `notebook` | `pip install "sparsehydro[notebook]"` | Running your own Jupyter notebooks (ipykernel, numba, openpyxl, kaleido) |
+| `docs`     | `pip install "sparsehydro[docs]"`     | Sphinx documentation build                           |
+| `dev`      | `pip install -e ".[dev]"`             | Everything needed to run the tests and build the docs |
 
-Interactive charts always require:
+A small sample dataset ships with the package:
 
-```bash
-pip install plotly
+```python
+from sparsehydro.sample_data import load_sample
+df = load_sample("tc-nb-001")   # 5-min rain [in] and stormflow [cfs], March 2022
 ```
 
 ## Quick start — custom model
@@ -352,7 +355,16 @@ fig.show()
 
 ## Documentation
 
-Full documentation is available at [cbuahin.github.io/sparsehydro](https://cbuahin.github.io/sparsehydro).
+Full documentation is available at [coc-msd.github.io/SparseHydro](https://coc-msd.github.io/SparseHydro/).
+
+## Contributing
+
+Contributions are welcome, including new model formulations. Please read
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request; it covers the
+development setup, how to add a formulation, testing, and repository rules
+(no notebooks, generated outputs, or large files in the repository).
+
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
