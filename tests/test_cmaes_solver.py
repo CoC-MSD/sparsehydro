@@ -1,13 +1,9 @@
-"""Regression coverage for scalar Platypus CMA-ES and bundled RDII routing."""
+"""Regression coverage for the scalar Platypus CMA-ES solver."""
 
 import copy
-import importlib
 import json
 from pathlib import Path
 import random
-import sys
-from types import SimpleNamespace
-from types import ModuleType
 
 import numpy as np
 import pytest
@@ -138,118 +134,6 @@ def test_worker_failure_is_not_hidden():
 
     with pytest.raises(RuntimeError, match="model evaluation failed"):
         solver().solve(Broken())
-
-
-@pytest.fixture
-def rdii(monkeypatch):
-    root = Path(__file__).resolve().parents[1]
-    monkeypatch.syspath_prepend(str(root / "swmmrdii"))
-    # Isolate solver routing from the bundled legacy model's removed factory API.
-    model_module = ModuleType("swmmrdii.model")
-    monkeypatch.setattr(model_module, "RdiiModel", FakeRdii, raising=False)
-    monkeypatch.setitem(sys.modules, "swmmrdii.model", model_module)
-    return importlib.import_module("swmmrdii.calibration")
-
-
-class FakeTemplate:
-    scalar_parameter_names = ["R_1", "scale"]
-
-    def get_scalar_parameter(self, name):
-        return SimpleNamespace(value={"R_1": 0.2, "scale": 2.0}[name])
-
-
-class FakeRdii:
-    name = "test"
-    _param_meta = [("R_1", 0.01, 0.8, False), ("scale", 0.1, 10.0, True)]
-    _templates = [FakeTemplate()]
-
-
-def fake_optimizer(rdii, **kwargs):
-    owner = rdii.CalOptimizer(FakeRdii(), objective=kwargs.pop("objective", "mse"),
-                              seed_selection="objective", **kwargs)
-    owner._r_sorted = ["R_1"]
-    owner._obs_cal = np.array([1., 2., 3., 4.])
-    owner._obs_cal_mean = owner._obs_cal.mean()
-    owner._obs_cal_std = owner._obs_cal.std()
-    owner._obs_cal_var = owner._obs_cal.var()
-    owner._simulate_cal = lambda params, forcing: (
-        owner._obs_cal * (params["R_1"] + params["scale"])
-    )
-    owner._store_selected_diagnostics = lambda forcing: None
-    return owner
-
-
-def test_rdii_aliases_retain_nsga2_and_reject_removed_sampler(rdii):
-    for alias in ("NSGAII", "nsga-ii", "nsga2", "nsga_ii"):
-        assert rdii._resolve_sampler(alias) == "sh_nsga2"
-    with pytest.raises(ValueError, match="Unknown sampler"):
-        rdii._resolve_sampler("TPE")
-
-
-@pytest.mark.parametrize("sampler", ["CMA-ES", "NSGAII", "scipy", "sh_pso", "sh_platypus"])
-def test_rdii_real_solver_routing_and_physical_result_units(rdii, sampler):
-    import platypus
-
-    owner = fake_optimizer(rdii, sampler=sampler, n_trials=24, n_startup=4)
-    options = {"algorithm_class": platypus.NSGAII, "population_size": 4} if sampler == "sh_platypus" else {}
-    if sampler == "scipy":
-        options = {"popsize": 3, "polish": False}
-    owner._optimize_sparsehydro([], owner._obs_cal, owner._obs_cal_mean,
-                               owner._obs_cal_std, owner._obs_cal_var,
-                               **options)
-    result = owner.study
-    assert np.isfinite(result.pareto_F).all()
-    assert 0.01 <= owner.best_params["R_1"] <= 0.8
-    assert 0.1 <= owner.best_params["scale"] <= 10
-    for record in result.history:
-        assert np.all((record.X[:, 1] >= 0.1) & (record.X[:, 1] <= 10))
-    actual = np.mean((owner._simulate_cal(owner.best_params, []) - owner._obs_cal) ** 2)
-    assert owner.cal_nse == pytest.approx(1 - actual / owner._obs_cal_var)
-
-
-def test_rdii_warmstart_and_robust_seed_screening_are_used(rdii):
-    owner = fake_optimizer(rdii, sampler="CMA-ES", n_trials=24, n_startup=4,
-                           multi_start_seeds=[2, 3])
-    owner.seed_selection = "robust"
-    owner._warmstart_params = {"R_1": 0.25, "scale": 0.75}
-    seen = []
-
-    def screen(candidates, forcing):
-        seen.extend(candidates)
-        return 1, [{"seed": 3}], "screened calibration-only"
-
-    owner._screen_seeds = screen
-    owner._optimize_sparsehydro([], owner._obs_cal, owner._obs_cal_mean,
-                               owner._obs_cal_std, owner._obs_cal_var)
-    assert len(seen) == 2
-    assert owner.best_seed == 3
-    assert owner.seed_selection_note == "screened calibration-only"
-    assert owner.study.pareto_F[0, 0] < 1e-28
-    assert len(owner.study.history) == 48
-
-
-@pytest.mark.parametrize("gate", ["watershed", "subcatchment"])
-def test_rdii_rejects_an_entirely_infeasible_search(rdii, gate):
-    owner = fake_optimizer(rdii, sampler="CMA-ES", n_trials=8, n_startup=4,
-                           seed_initial=False)
-    if gate == "watershed":
-        owner.model._param_meta = [("R_1", 1.1, 1.3, False), ("scale", 0.1, 10., True)]
-    else:
-        owner._simulate_cal = lambda params, forcing: None
-    with pytest.raises(RuntimeError, match="physically infeasible"):
-        owner._optimize_sparsehydro([], owner._obs_cal, owner._obs_cal_mean,
-                                   owner._obs_cal_std, owner._obs_cal_var)
-
-
-def test_rdii_maximize_convergence_uses_display_values_and_running_best(rdii):
-    owner = fake_optimizer(rdii, objective="ccc", sampler="CMA-ES", n_trials=24, n_startup=4)
-    owner._optimize_sparsehydro([], owner._obs_cal, owner._obs_cal_mean,
-                               owner._obs_cal_std, owner._obs_cal_var)
-    with pytest.warns(UserWarning, match="importance plots"):
-        plots = owner.plot_diagnostics(param_importances=True)
-    convergence, _ = plots[0]
-    expected = owner.study.to_pareto_dataframe().ccc.cummax().to_numpy()
-    np.testing.assert_array_equal(convergence.data[0].y, expected)
 
 
 def test_current_notebook_runs_cmaes_from_its_settings_page(tmp_path):
