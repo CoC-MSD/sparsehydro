@@ -66,15 +66,27 @@ def mae(observed, predicted) -> float:
     return float(np.mean(np.abs(obs - pred)))
 
 
-def nash_sutcliffe(observed, predicted) -> float:
+def _check_undefined(undefined: str) -> None:
+    if undefined not in ("raise", "nan"):
+        raise ValueError("undefined must be 'raise' or 'nan'")
+
+
+def nash_sutcliffe(observed, predicted, *, undefined: str = "raise") -> float:
     """Nash-Sutcliffe efficiency (1 is perfect).
 
-    :raises ValueError: If the observed series is constant.
+    :param undefined: ``"raise"`` (default) raises ``ValueError`` for a
+        constant observed series; ``"nan"`` returns NaN instead, and also for
+        an empty series.
     """
+    _check_undefined(undefined)
     obs, pred = _pair(observed, predicted)
+    if undefined == "nan" and obs.size == 0:
+        return math.nan
     ss_res = float(np.sum((obs - pred) ** 2))
     ss_tot = float(np.sum((obs - np.mean(obs)) ** 2))
     if ss_tot == 0.0:
+        if undefined == "nan":
+            return math.nan
         raise ValueError("SS_tot is zero; observed series is constant — NSE is undefined.")
     return 1.0 - ss_res / ss_tot
 
@@ -117,16 +129,20 @@ def kge(observed, predicted) -> float:
     return float(1.0 - np.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2))
 
 
-def pbias(observed, predicted) -> float:
+def pbias(observed, predicted, *, undefined: str = "raise") -> float:
     """Signed percent bias ``100 * sum(predicted - observed) / sum(observed)``.
 
     Positive values mean the model over-predicts volume.
 
-    :raises ValueError: If ``sum(observed)`` is zero.
+    :param undefined: ``"raise"`` (default) raises ``ValueError`` when
+        ``sum(observed)`` is zero; ``"nan"`` returns NaN instead.
     """
+    _check_undefined(undefined)
     obs, pred = _pair(observed, predicted)
     total_obs = float(np.sum(obs))
     if total_obs == 0.0:
+        if undefined == "nan":
+            return math.nan
         raise ValueError("sum(observed) is zero; PBIAS is undefined.")
     return float(100.0 * np.sum(pred - obs) / total_obs)
 
@@ -165,8 +181,7 @@ def concordance_correlation(observed, predicted, *, undefined: str = "raise") ->
         instead, and also for fewer than two points or non-finite values,
         which suits reports.
     """
-    if undefined not in ("raise", "nan"):
-        raise ValueError("undefined must be 'raise' or 'nan'")
+    _check_undefined(undefined)
     obs, pred = _pair(observed, predicted)
     if undefined == "nan" and (obs.size < 2 or not np.all(np.isfinite(obs))
                                or not np.all(np.isfinite(pred))):
@@ -244,14 +259,8 @@ def fit_summary(observed, predicted) -> dict[str, float]:
            "peak_error_pct": math.nan, "n": float(obs.size)}
     if obs.size < 2:
         return out
-    try:
-        out["nse"] = nash_sutcliffe(obs, pred)
-    except ValueError:
-        pass
-    try:
-        out["pbias"] = pbias(obs, pred)
-    except ValueError:
-        pass
+    out["nse"] = nash_sutcliffe(obs, pred, undefined="nan")
+    out["pbias"] = pbias(obs, pred, undefined="nan")
     if np.std(obs) > 0 and np.std(pred) > 0:
         out["r2"] = float(np.corrcoef(obs, pred)[0, 1] ** 2)
     peak = float(np.max(obs))

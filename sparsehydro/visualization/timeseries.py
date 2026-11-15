@@ -13,6 +13,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Union
 
 import numpy as np
+
+from ..metrics.functions import nash_sutcliffe
 import pandas as pd
 
 from ..enums import ModelState
@@ -162,9 +164,7 @@ try:
 
         # Goodness-of-fit metrics for the 1v1 panel
         r = float(np.corrcoef(obs, pred)[0, 1])
-        ss_res = float(np.sum((obs - pred) ** 2))
-        ss_tot = float(np.sum((obs - obs.mean()) ** 2))
-        nse = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+        nse = nash_sutcliffe(obs, pred, undefined="nan")
 
         max_lags = min(30, len(residuals) - 1)
         std = np.std(residuals)
@@ -617,9 +617,7 @@ try:
 
         # Goodness-of-fit metrics for the 1v1 panel
         _r = float(np.corrcoef(observed, predicted)[0, 1])
-        _ss_res = float(np.sum((observed - predicted) ** 2))
-        _ss_tot = float(np.sum((observed - observed.mean()) ** 2))
-        _nse = 1.0 - _ss_res / _ss_tot if _ss_tot > 0 else float("nan")
+        _nse = nash_sutcliffe(observed, predicted, undefined="nan")
 
         exogenous = exogenous or {}
 
@@ -1534,9 +1532,7 @@ try:
         pred = np.asarray(predicted, dtype=float)
 
         r = float(np.corrcoef(obs, pred)[0, 1])
-        ss_res = float(np.sum((obs - pred) ** 2))
-        ss_tot = float(np.sum((obs - obs.mean()) ** 2))
-        nse = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+        nse = nash_sutcliffe(obs, pred, undefined="nan")
 
         lo_slope = 1.0 - band_pct / 100.0
         hi_slope = 1.0 + band_pct / 100.0

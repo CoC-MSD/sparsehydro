@@ -26,6 +26,7 @@ from ..events import (
     sub_events_to_dataframe,
 )
 from ..events.hierarchy import GLOBAL_EVENT_GAP_DAYS
+from ..metrics.functions import nash_sutcliffe
 from ..models.base import IModel
 from ..models.unithydrograph import GlobalSequentialFitter, SequentialFitSummary
 
@@ -161,8 +162,7 @@ def span_nse(result: ViewerResult, start: pd.Timestamp, end: pd.Timestamp) -> fl
     sel = (obs["datetime"] >= start) & (obs["datetime"] <= end)
     o = obs.loc[sel, "stormflow"].to_numpy(dtype=float)
     p = pred.loc[sel.to_numpy(), "Q_pred"].to_numpy(dtype=float)
-    denom = float(np.sum((o - o.mean()) ** 2)) if o.size else 0.0
-    return 1.0 - float(np.sum((o - p) ** 2)) / denom if denom > 0 else float("nan")
+    return nash_sutcliffe(o, p, undefined="nan")
 
 
 def global_event_table(result: ViewerResult) -> pd.DataFrame:

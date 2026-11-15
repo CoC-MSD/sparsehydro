@@ -11,7 +11,7 @@ import pandas as pd
 from sparsehydro.metrics.objectives import Con15
 from sparsehydro.calibration.result import CalibrationResult, GenerationRecord
 from sparsehydro.calibration.wholeflow_acceptance import AcceptanceEvaluator
-from sparsehydro.metrics.functions import concordance_correlation
+from sparsehydro.metrics.functions import concordance_correlation, nash_sutcliffe, pbias
 from sparsehydro.events.msdgc import find_events
 from sparsehydro.models.rdii.initial_abstraction import SnowConfig, snow_partition
 from sparsehydro.models.wholeflow_compact import CompactWholeFlowModel
@@ -439,9 +439,9 @@ def hydrograph_diagnostics(observed: np.ndarray, modeled: np.ndarray) -> dict:
     x, y = np.asarray(observed), np.asarray(modeled)
     if not len(x) or not np.isfinite(x).all() or not np.isfinite(y).all():
         return {"ccc": np.nan, "nse": np.nan, "bias_pct": np.nan, "n": len(x)}
-    denominator = float(np.sum((x - x.mean()) ** 2))
-    return dict(ccc=concordance_correlation(x, y, undefined="nan"), nse=1 - float(np.sum((y - x) ** 2)) / denominator if denominator > 0 else np.nan,
-                bias_pct=100 * float((y - x).sum() / x.sum()) if x.sum() > 0 else np.nan, n=len(x))
+    return dict(ccc=concordance_correlation(x, y, undefined="nan"),
+                nse=nash_sutcliffe(x, y, undefined="nan"),
+                bias_pct=pbias(x, y, undefined="nan"), n=len(x))
 
 
 

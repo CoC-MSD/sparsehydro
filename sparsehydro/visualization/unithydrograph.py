@@ -16,6 +16,8 @@ Functions
 from __future__ import annotations
 
 import numpy as np
+
+from ..metrics.functions import fit_summary
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -857,23 +859,10 @@ def plot_uh_shapes(
 
 
 def _fit_metrics(obs: np.ndarray, pred: np.ndarray) -> dict:
-    """Return NSE, PBIAS, R² and peak error for observed vs predicted arrays."""
-    obs = np.asarray(obs, dtype=float)
-    pred = np.asarray(pred, dtype=float)
-    sel = ~(np.isnan(obs) | np.isnan(pred))
-    obs, pred = obs[sel], pred[sel]
-    if obs.size == 0:
-        return {"NSE": np.nan, "PBIAS": np.nan, "R2": np.nan, "peak_err": np.nan}
-    denom = float(np.sum((obs - obs.mean()) ** 2))
-    nse = 1.0 - float(np.sum((obs - pred) ** 2)) / denom if denom > 0 else np.nan
-    pbias = 100.0 * float(np.sum(pred - obs)) / float(np.sum(obs)) if np.sum(obs) != 0 else np.nan
-    if obs.std() > 0 and pred.std() > 0:
-        r = float(np.corrcoef(obs, pred)[0, 1])
-        r2 = r * r
-    else:
-        r2 = np.nan
-    peak_err = (float(pred.max() - obs.max()) / obs.max()) if obs.max() != 0 else np.nan
-    return {"NSE": nse, "PBIAS": pbias, "R2": r2, "peak_err": peak_err}
+    """NSE, PBIAS, R² and fractional peak error for the convolution panel."""
+    summary = fit_summary(obs, pred)
+    return {"NSE": summary["nse"], "PBIAS": summary["pbias"], "R2": summary["r2"],
+            "peak_err": summary["peak_error_pct"] / 100.0}
 
 
 def plot_convolution(
