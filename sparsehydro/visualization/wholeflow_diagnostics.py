@@ -21,6 +21,7 @@ from sparsehydro.models.baseflow import CenteredWeeklyPattern
 from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
 from .calibration import plot_pareto_scatter_matrix
 from .display import add_val_vrects
+from .._validation import verify_close
 from ..units import ACRE_INCH_TO_FT3
 
 
@@ -35,8 +36,8 @@ def plot_water_balance(
         * (dt_hours * 3600) / (area * ACRE_INCH_TO_FT3) + prediction["unrouted_excess_in"])
     accounted += (prediction["S_in"] + prediction["G_in"]
                   + prediction["routing_storage_in"] + prediction["SWE_in"])
-    np.testing.assert_allclose(precipitation, accounted, atol=1e-8, rtol=0,
-                               err_msg="Displayed budget must close using the selected contributing area")
+    verify_close(precipitation, accounted, atol=1e-8, rtol=0,
+                 what="Displayed budget (using the selected contributing area)")
     fig = go.Figure()
     for values, name in ((precipitation, "Precipitation + initial storage"),
                          (accounted, "Outputs + S + G + routing + SWE")):

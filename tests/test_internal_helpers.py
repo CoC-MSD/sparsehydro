@@ -44,3 +44,15 @@ def test_unit_constants():
     assert units.IN_AC_PER_HR_TO_CFS == pytest.approx(1.008333, rel=1e-6)
     assert units.MM_AC_PER_HR_TO_CFS == pytest.approx(units.IN_AC_PER_HR_TO_CFS / 25.4)
     assert units.MGD_TO_CFS == pytest.approx(1.547229, rel=1e-6)
+
+
+def test_verification_helpers():
+    from sparsehydro._validation import VerificationError, verify_close, verify_equal
+
+    verify_close([1.0, 2.0], [1.0, 2.0 + 1e-12])
+    verify_equal([1, 2], [1, 2])
+    with pytest.raises(VerificationError, match="Total flow do not agree"):
+        verify_close([1.0], [1.1], what="Total flow")
+    with pytest.raises(VerificationError, match="Snow forcing changed"):
+        verify_equal([1.0], [2.0], what="Snow forcing")
+    assert issubclass(VerificationError, RuntimeError)

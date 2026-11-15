@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from sparsehydro._validation import verify_close, verify_equal
 from sparsehydro.studies.msdgc.settings import (
     StudySettings, _validate_peak_preference,
 )
@@ -435,20 +436,21 @@ def calibrate_pattern_model(
             raise RuntimeError("Selected melt escaped the frozen envelope; rerun after changing bounds.")
     else:
         for column in ("SWE_in", "melt_in", "liquid_input_in"):
-            np.testing.assert_array_equal(data[column], prediction[column], err_msg="Fixed snow forcing changed.")
+            verify_equal(data[column], prediction[column], what=f"Fixed snow forcing ({column})")
     for column in prediction:
         if column not in ("datetime", "baseflow_cfs", "sanitary_cfs"):
             data[column] = prediction[column].to_numpy()
     data["joint_baseflow_cfs"] = prediction["baseflow_cfs"].to_numpy()
     data["joint_sanitary_cfs"] = prediction["sanitary_cfs"].to_numpy()
     data["joint_G_at_cap"] = prediction["G_at_cap"].to_numpy()
-    np.testing.assert_allclose(prediction.total_cfs,
-                               prediction.sanitary_cfs + prediction.gwi_cfs + prediction.rdii_cfs)
+    verify_close(prediction.total_cfs, prediction.sanitary_cfs + prediction.gwi_cfs + prediction.rdii_cfs,
+                 what="Total flow and its components")
     verified = result.objective_display_values()[selected]
-    np.testing.assert_allclose(verified, [obj.compute(observed, prediction.total_cfs.to_numpy()) for obj in objectives])
+    verify_close(verified, [obj.compute(observed, prediction.total_cfs.to_numpy()) for obj in objectives],
+                 what="Recomputed objectives and the solver's values")
     if peak_filter is not None:
-        np.testing.assert_allclose(peak_filter.compute(observed, prediction.total_cfs.to_numpy()),
-                                   table.loc[selected, "filter_peak_error"])
+        verify_close(peak_filter.compute(observed, prediction.total_cfs.to_numpy()),
+                     table.loc[selected, "filter_peak_error"], what="Recomputed and recorded peak error")
     diagnostics = []
     for label, mask in (("train", train), ("validation", prepared.val_mask)):
         split_events = coverage.acceptance_events.loc[coverage.acceptance_events["split"].eq(label)]
