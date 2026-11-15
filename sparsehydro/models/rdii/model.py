@@ -71,6 +71,10 @@ class RDIIModel(IModel):
     :type uh_components: list[IUnitHydroComponent], optional
     :param units: Unit system — ``"imperial"`` (inches, default) or ``"metric"`` (mm).
     :type units: str
+    :param component_outputs: When ``True``, :meth:`predict_arrays` also returns
+        ``rdii_component_{i}`` [cfs] for each UH component (before the final
+        non-negativity clip of the total).
+    :type component_outputs: bool
 
     Usage::
 
@@ -98,6 +102,8 @@ class RDIIModel(IModel):
         ia_model: IModel | None = None,
         uh_components: list[IUnitHydroComponent] | None = None,
         units: str = "imperial",
+        *,
+        component_outputs: bool = False,
     ) -> None:
         super().__init__()
         if units not in ("imperial", "metric"):
@@ -116,6 +122,7 @@ class RDIIModel(IModel):
         else:
             self._uh_components = list(uh_components)
 
+        self.component_outputs = bool(component_outputs)
         self._prepared_df: pd.DataFrame | None = None
         self._dt_hours: float = 1.0
 
@@ -144,6 +151,18 @@ class RDIIModel(IModel):
     def uh_components(self) -> list[IUnitHydroComponent]:
         """The unit hydrograph components, in registration order."""
         return list(self._uh_components)
+
+    @property
+    def input_field_names(self) -> list[str]:
+        """Inputs of the IA model (e.g. ``p_excess_in`` for :class:`ExternalExcess`)."""
+        return list(self._ia_model.input_field_names)
+
+    def set_input(self, name: str, values: np.ndarray) -> None:
+        """Forward a bound input to the IA model."""
+        self._ia_model.set_input(name, values)
+
+    def _has_freeze_constraint(self) -> bool:
+        return {"ia_T_freeze", "ia_T_ref"} <= set(self._ia_param_name_map)
 
     # ------------------------------------------------------------------
     # IModel lifecycle
@@ -175,8 +194,11 @@ class RDIIModel(IModel):
                 units="-", description=f"Component {i}: fraction of P_excess routed through this UH",
             ))
 
+        # IA parameters keep their names; names RDII already owns (area_acres)
+        # stay RDII's.
         self._ia_param_name_map = {
             name: name for name in self._ia_model.scalar_parameter_names
+            if name not in self._scalar_parameters
         }
         for name in self._ia_param_name_map:
             p = self._ia_model.get_scalar_parameter(name)
@@ -208,13 +230,14 @@ class RDIIModel(IModel):
                 "(total runoff fraction must not exceed 100 %)"
             ),
         ))
-        self.register_inequality_constraint(ConstraintRecord(
-            name="T_freeze_lt_T_ref",
-            description=(
-                "ia_T_freeze < ia_T_ref  "
-                "(freeze threshold must be below the reference temperature)"
-            ),
-        ))
+        if self._has_freeze_constraint():
+            self.register_inequality_constraint(ConstraintRecord(
+                name="T_freeze_lt_T_ref",
+                description=(
+                    "ia_T_freeze < ia_T_ref  "
+                    "(freeze threshold must be below the reference temperature)"
+                ),
+            ))
         # Constraints of the UH components (e.g. a triangle's Tp < Tb).
         for i, uh in enumerate(self._uh_components, 1):
             for record in uh._constraint_registry:
@@ -348,24 +371,30 @@ class RDIIModel(IModel):
         p_excess = np.asarray(ia_result[self._excess_col], dtype=float)
         n = len(p_excess)
         rdii = np.zeros(n, dtype=float)
+        area_acres = self.get_scalar_parameter("area_acres").value
+        components: dict[str, np.ndarray] = {}
 
         for i, uh in enumerate(self._uh_components, 1):
             R_i = self.get_scalar_parameter(f"R_{i}").value
             kernel = uh.get_kernel(self._dt_hours)
-            rdii += R_i * convolve_causal(p_excess, kernel, n_out=n)
+            part = R_i * convolve_causal(p_excess, kernel, n_out=n)
+            rdii += part
+            if self.component_outputs:
+                components[f"rdii_component_{i}"] = part * area_acres * self._depth_to_cfs
 
         rdii = np.clip(rdii, 0.0, None)
-        area_acres = self.get_scalar_parameter("area_acres").value
         rdii_cfs = rdii * area_acres * self._depth_to_cfs
         rdii_depth = rdii * self._dt_hours
 
         self._state = ModelState.PREDICTED
-        return {
+        out = {
             "datetime": self._prepared_df["datetime"].values,
             "rdii_cfs": rdii_cfs,
             self._depth_col: rdii_depth,
             self._excess_col: p_excess.copy(),
         }
+        out.update(components)
+        return out
 
     def predict(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
         """Compute RDII by convolving P_excess with each UH component.
@@ -444,9 +473,10 @@ class RDIIModel(IModel):
             self.get_scalar_parameter(f"R_{i}").value
             for i in range(1, self.n_components + 1)
         )
-        T_freeze = self.get_scalar_parameter("ia_T_freeze").value
-        T_ref = self.get_scalar_parameter("ia_T_ref").value
-        out = [R_sum - 1.0, T_freeze - T_ref]
+        out = [R_sum - 1.0]
+        if self._has_freeze_constraint():
+            out.append(self.get_scalar_parameter("ia_T_freeze").value
+                       - self.get_scalar_parameter("ia_T_ref").value)
         if any(uh._constraint_registry for uh in self._uh_components):
             self._sync_to_submodels()
             for uh in self._uh_components:

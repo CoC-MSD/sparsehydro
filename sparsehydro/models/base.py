@@ -131,6 +131,31 @@ class IModel(ABC):
         self._output_fields = {}
 
     # ------------------------------------------------------------------
+    # Inputs supplied by other models (used by CompositeModel)
+    # ------------------------------------------------------------------
+
+    @property
+    def input_field_names(self) -> list[str]:
+        """Names of arrays this model can receive from another model.
+
+        A :class:`~sparsehydro.models.composite.CompositeModel` binds an
+        upstream output to one of these names and passes it with
+        :meth:`set_input` after :meth:`prepare` and before each predict.
+        The default is none.
+        """
+        return []
+
+    def set_input(self, name: str, values: np.ndarray) -> None:
+        """Replace input array *name* after :meth:`prepare`.
+
+        :raises KeyError: If *name* is not in :attr:`input_field_names`.
+        """
+        raise KeyError(
+            f"{type(self).__name__} accepts no bound inputs; got {name!r}. "
+            f"Available: {self.input_field_names}"
+        )
+
+    # ------------------------------------------------------------------
     # State queries
     # ------------------------------------------------------------------
 

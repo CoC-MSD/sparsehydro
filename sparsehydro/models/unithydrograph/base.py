@@ -361,6 +361,17 @@ class UnitHydrographBase(IUnitHydroComponent, ABC):
         self._rain = arr
         self._state = ModelState.PREPARED
 
+    @property
+    def input_field_names(self) -> list[str]:
+        """The forcing column, which a composite can bind to an upstream output."""
+        return [self._rain_column]
+
+    def set_input(self, name: str, values: np.ndarray) -> None:
+        """Replace the forcing (the only bindable input) after :meth:`prepare`."""
+        if name != self._rain_column:
+            raise KeyError(f"{type(self).__name__} input is {self._rain_column!r}; got {name!r}")
+        self.set_forcing(values)
+
     def amplitude(self) -> float:
         """Current amplitude (1.0 when the class has none)."""
         return self._p(self._amplitude_param_name) if self._amplitude_param_name else 1.0

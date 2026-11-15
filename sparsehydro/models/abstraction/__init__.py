@@ -10,6 +10,8 @@ Models
 - :class:`ConstantDrainTank` — ``V_C``: constant drainage per step.
 - :class:`LinearDrainTank` — ``V_lin``: drainage proportional to storage (``k·V``).
 - :class:`SqrtDrainTank` — ``V_sroot``: drainage proportional to ``k·sqrt(V)``.
+- :class:`ExternalExcess` — no parameters; excess read from data or supplied
+  by another model inside a composite.
 
 All three expose the :class:`~sparsehydro.models.IModel` lifecycle and emit a
 ``p_excess_in`` / ``p_excess_mm`` column, matching
@@ -17,6 +19,7 @@ All three expose the :class:`~sparsehydro.models.IModel` lifecycle and emit a
 abstraction stage of :class:`~sparsehydro.models.AbstractionUHModel`.
 """
 
+from .external import ExternalExcess
 from .tank import (
     ConstantDrainTank,
     LinearDrainTank,
@@ -25,6 +28,7 @@ from .tank import (
 )
 
 __all__ = [
+    "ExternalExcess",
     "TankAbstractionModel",
     "ConstantDrainTank",
     "LinearDrainTank",
