@@ -206,9 +206,10 @@ def test_notebook_explicitly_wires_area_into_calibration(calibrate_area, snow_mo
 ])
 @pytest.mark.parametrize("use_filter", [False, True])
 def test_notebook_calibrates_lean_but_builds_full_selected_output(
-    monkeypatch, tmp_path, capsys, top_fraction, scoring_mode,
+    monkeypatch, tmp_path, caplog, top_fraction, scoring_mode,
     objective_names, use_filter,
 ):
+    caplog.set_level("INFO", logger="sparsehydro")
     import time
     from sparsehydro.metrics.objectives import PBIAS
 
@@ -479,7 +480,7 @@ def test_notebook_calibrates_lean_but_builds_full_selected_output(
         else:
             assert "passing_pareto_tbl" not in ns
             assert not (tmp_path / "pareto_filter_pass_metrics.csv").exists()
-        printed = capsys.readouterr().out
+        printed = caplog.text
         assert "train: total CCC=" in printed
         assert "validation: total CCC=" in printed
         assert "event_volume_ccc" in printed
@@ -925,9 +926,10 @@ def test_notebook_rejects_mislabeled_training_peak_events_before_solver(
 
 @pytest.mark.parametrize("control", ["disabled", "objective", "preference"])
 def test_notebook_coarse_grid_diagnostics_do_not_enable_unused_con15(
-    control, capsys,
+    control, caplog,
 ):
 
+    caplog.set_level("INFO", logger="sparsehydro")
     namespace = dict(np=np, pd=pd)
     namespace.update(controls())
     mask = np.ones(10, bool)
@@ -950,7 +952,7 @@ def test_notebook_coarse_grid_diagnostics_do_not_enable_unused_con15(
         audit = namespace["peak_objective_events"]
         assert audit.observed_conveyance_volume_mg.isna().all()
         assert audit.observed_conveyance_reason.str.contains("zero native samples").all()
-        assert "Undefined observed conveyance-volume diagnostics" in capsys.readouterr().out
+        assert "Undefined observed conveyance-volume diagnostics" in caplog.text
         assert [o.name for o in namespace["calibration_objectives"]] == ["ccc"]
 
 

@@ -91,12 +91,12 @@ def align_air_temperature(
         values.to_numpy(), index=times.dt.tz_convert("Etc/GMT+5").dt.tz_localize(None)).sort_index()
     if (temperature.groupby(level=0).nunique(dropna=False) > 1).any():
         raise ValueError("Conflicting duplicate temperature timestamps")
-    print(f"Temperature source {path}; missing source rows removed: {temperature.isna().sum()}")
+    logger.info("%s", f"Temperature source {path}; missing source rows removed: {temperature.isna().sum()}")
     temperature = temperature[~temperature.index.duplicated(keep="first")].dropna()
     if temperature.empty:
         raise ValueError("No finite temperature observations are available")
     keep = data["datetime"].between(temperature.index[0], temperature.index[-1])
-    print(f"Rows outside temperature coverage removed: {int((~keep).sum())}")
+    logger.info("%s", f"Rows outside temperature coverage removed: {int((~keep).sum())}")
     data = data.loc[keep].reset_index(drop=True).copy()
     if data.empty:
         raise ValueError("No common flow/rain/temperature coverage")
@@ -110,5 +110,5 @@ def align_air_temperature(
     data["temperature_c"] = aligned.reindex(grid).to_numpy()
     if not np.isfinite(data["temperature_c"]).all():
         raise ValueError("Incomplete temperature coverage; no endpoint filling")
-    print("Time convention: fixed EST as in the original notebook; source TSF timezone unverified.")
+    logger.info("%s", "Time convention: fixed EST as in the original notebook; source TSF timezone unverified.")
     return data, path

@@ -6,6 +6,8 @@ it never replaces the candidate selected from training objectives.
 
 from __future__ import annotations
 
+import logging
+
 import copy
 from dataclasses import asdict, dataclass, field
 import importlib.metadata
@@ -34,6 +36,8 @@ from sparsehydro.metrics.functions import concordance_correlation, nash_sutcliff
 from sparsehydro.models.presets.wholeflow import CompactWholeFlowModel
 from sparsehydro.studies.msdgc.assessment import AcceptanceEvaluator
 from sparsehydro.calibration.diagnostics import parameter_table
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -114,11 +118,11 @@ def groundwater_diagnostics(model: PatternWholeFlowModel, prediction: pd.DataFra
     _g = model.get_scalar_parameter
     _k_g = float(_g("k_G").value)
     if model.groundwater_enabled:
-        print(f"G slow-release e-fold time: {1 / (_k_g * 24):.2f} days; "
+        logger.info("%s", f"G slow-release e-fold time: {1 / (_k_g * 24):.2f} days; "
               f"half-life: {np.log(2) / (_k_g * 24):.2f} days (both assume no recharge)")
     else:
-        print("Groundwater module disabled: no diversion, deep storage, or GWI discharge.")
-    print("Near bounds:", ", ".join(bounds_tbl.loc[bounds_tbl.near_bound, "name"]))
+        logger.info("%s", "Groundwater module disabled: no diversion, deep storage, or GWI discharge.")
+    logger.info("%s %s", "Near bounds:", ", ".join(bounds_tbl.loc[bounds_tbl.near_bound, "name"]))
     _gwi_rows = []
     for _split, _mask in (("train", train_mask), ("validation", val_mask), ("whole", scored_mask)):
         _p = prediction.loc[_mask]
@@ -131,8 +135,8 @@ def groundwater_diagnostics(model: PatternWholeFlowModel, prediction: pd.DataFra
             status=("disabled" if not model.groundwater_enabled else
                     "defined" if _discharge > 0 else "undefined_no_discharge")))
     gwi_diagnostics = pd.DataFrame(_gwi_rows)
-    print("A high spill share means G discharge mainly follows S-to-G diversion, not slow G recession.")
-    print("Changing area scales GWI and RTK flow together; it does not itself change G depth or recession.")
+    logger.info("%s", "A high spill share means G discharge mainly follows S-to-G diversion, not slow G recession.")
+    logger.info("%s", "Changing area scales GWI and RTK flow together; it does not itself change G depth or recession.")
     return gwi_diagnostics
 
 
@@ -158,12 +162,12 @@ def seasonal_dry_diagnostics(model: PatternWholeFlowModel, prediction: pd.DataFr
                 gwi_mean_cfs=float(data.loc[_m, "gwi_cfs"].mean()),
                 rdii_mean_cfs=float(data.loc[_m, "rdii_cfs"].mean())))
     seasonal_diagnostics = pd.DataFrame(_diagnostic_rows)
-    print("Months are reporting groups only; no monthly corrections are fitted.")
+    logger.info("%s", "Months are reporting groups only; no monthly corrections are fitted.")
     if model.observed_background is not None:
         _missing_months = seasonal_diagnostics.loc[
             seasonal_diagnostics["split"].eq("train") & seasonal_diagnostics["n"].eq(0), "month"].tolist()
         if _missing_months:
-            print("CAUTION: no training dry-weather observations in months:", _missing_months)
+            logger.info("%s %s", "CAUTION: no training dry-weather observations in months:", _missing_months)
     _sensitivity_model = copy.deepcopy(model)
     _initial_names = ["s_initial_fraction"] + (["g_initial_fraction"] if model.groundwater_enabled else [])
     _initial_predictions = []
@@ -171,10 +175,9 @@ def seasonal_dry_diagnostics(model: PatternWholeFlowModel, prediction: pd.DataFr
         for _name in _initial_names:
             _sensitivity_model.get_scalar_parameter(_name).value = _fraction
         _initial_predictions.append(_sensitivity_model.predict()["total_cfs"].to_numpy())
-    print("Empty vs full active initial stores (initial SWE unchanged), max scored flow difference [cfs]:",
-          float(np.max(np.abs(_initial_predictions[0][scored_mask] -
+    logger.info("%s %s", "Empty vs full active initial stores (initial SWE unchanged), max scored flow difference [cfs]:", float(np.max(np.abs(_initial_predictions[0][scored_mask] -
                               _initial_predictions[1][scored_mask]))))
-    print("This is a fixed-parameter sensitivity check, not proof of warmup equilibration.")
+    logger.info("%s", "This is a fixed-parameter sensitivity check, not proof of warmup equilibration.")
     return seasonal_diagnostics
 
 
@@ -194,14 +197,14 @@ def export_pattern_report(prepared: PreparedPatternData, coverage: PatternEventC
     conveyance_tbl, zone_volumes_tbl = report.conveyance, report.zone_volumes
     scorecard_msdgc, status_msdgc = report.scorecard, report.statuses
     report_evaluators, hydrograph_summary = report.evaluators, report.hydrograph_summary
-    print("REPORT ONLY: no solver calls or solution selection in this checker.")
-    print("MSDGC total-flow comparison: independent maximum-volume windows; configured assessment exclusions applied.")
-    print("Not the official effective-storm scorecard; no Qcritical or overall grade is inferred.")
-    print("Full-event-volume CCC is an additional diagnostic, not one of the three MSDGC zones.")
-    print(scorecard_msdgc.round(4).to_string(na_rep="undefined"))
-    print(status_msdgc.to_string())
-    print("Individual passes do not override failures/undefined criteria; no full compliance claim.")
-    print("Timestep metrics by domain; report_event_windows use the assessment inventory after exclusions:")
+    logger.info("%s", "REPORT ONLY: no solver calls or solution selection in this checker.")
+    logger.info("%s", "MSDGC total-flow comparison: independent maximum-volume windows; configured assessment exclusions applied.")
+    logger.info("%s", "Not the official effective-storm scorecard; no Qcritical or overall grade is inferred.")
+    logger.info("%s", "Full-event-volume CCC is an additional diagnostic, not one of the three MSDGC zones.")
+    logger.info("%s", scorecard_msdgc.round(4).to_string(na_rep="undefined"))
+    logger.info("%s", status_msdgc.to_string())
+    logger.info("%s", "Individual passes do not override failures/undefined criteria; no full compliance claim.")
+    logger.info("%s", "Timestep metrics by domain; report_event_windows use the assessment inventory after exclusions:")
     if study.workflow["selection"]["USE_TRAINING_PEAK_FILTER"]:
         _started = time.perf_counter()
         passing_pareto_tbl = passing_pareto_metrics(
@@ -210,19 +213,19 @@ def export_pattern_report(prepared: PreparedPatternData, coverage: PatternEventC
             ["pareto_index", "primary_score", "primary_score_increase", "near_tie_eligible"]],
             on="pareto_index", validate="one_to_one")
         prepared.phase_seconds["passing_pareto_reporting"] = time.perf_counter() - _started
-        print(f"# of Con15-filter acceptable solutions: {len(passing_pareto_tbl)} "
+        logger.info("%s", f"# of Con15-filter acceptable solutions: {len(passing_pareto_tbl)} "
               f"of {len(fit.pareto_solutions)} final Pareto solutions")
-        print("Acceptable here means the TRAINING conveyance-volume filter only; other metrics may fail or be undefined.")
-        print("Threshold passes are report only; candidates outside the near-tie shortlist cannot be selected.")
-        print(f"Filter top fraction={study.workflow['selection']['CON15_FILTER_FRACTION']:g}; standard reported Con15=0.15")
+        logger.info("%s", "Acceptable here means the TRAINING conveyance-volume filter only; other metrics may fail or be undefined.")
+        logger.info("%s", "Threshold passes are report only; candidates outside the near-tie shortlist cannot be selected.")
+        logger.info("%s", f"Filter top fraction={study.workflow['selection']['CON15_FILTER_FRACTION']:g}; standard reported Con15=0.15")
         if passing_pareto_tbl.empty:
-            print("No passing solutions. The selected threshold-failing candidate is not included in this count/table.")
+            logger.info("%s", "No passing solutions. The selected threshold-failing candidate is not included in this count/table.")
         else:
             _passing_columns = ["pareto_index", "selected", "primary_score", "primary_score_increase",
                 "near_tie_eligible", "filter_peak_slope", "filter_peak_error"] + [
                 f"{_split}_{_metric}" for _split in ("train", "validation", "whole")
                 for _metric in MSDGCAssessment.report_metric_names]
-            print(passing_pareto_tbl[_passing_columns].to_string(index=False, na_rep="undefined", float_format="{:.4f}".format))
+            logger.info("%s", passing_pareto_tbl[_passing_columns].to_string(index=False, na_rep="undefined", float_format="{:.4f}".format))
         passing_pareto_tbl.to_csv(artifact_dir / "pareto_filter_pass_metrics.csv", index=False)
 
     _started = time.perf_counter()
@@ -382,8 +385,8 @@ def export_pattern_report(prepared: PreparedPatternData, coverage: PatternEventC
         (artifact_dir / "observed_background.json").write_text(
             json.dumps(model.observed_background.to_dict(), indent=2, allow_nan=False), encoding="utf-8")
     (artifact_dir / "run_metadata.json").write_text(json.dumps(run_metadata, indent=2), encoding="utf-8")
-    print("Phase timings [s]:", prepared.phase_seconds)
-    print("Saved separate run artifacts:", artifact_dir)
+    logger.info("%s %s", "Phase timings [s]:", prepared.phase_seconds)
+    logger.info("%s %s", "Saved separate run artifacts:", artifact_dir)
     report.metadata = run_metadata
     return report
 
@@ -464,8 +467,8 @@ def export_pattern_tsf(prepared: PreparedPatternData, prediction: pd.DataFrame, 
                       title=f"{data_title} Modeled {_variable}{_title_suffix}",
                       variable=_variable, unit="MGD")
             _paths[_variable] = _path
-            print(f"{_variable}: {len(_tsf_predictions):,} rows in MGD; saved {_path}")
-        print(f"TSF{_suffix} period (warmup excluded): {_tsf_predictions.index[0]} -> "
+            logger.info("%s", f"{_variable}: {len(_tsf_predictions):,} rows in MGD; saved {_path}")
+        logger.info("%s", f"TSF{_suffix} period (warmup excluded): {_tsf_predictions.index[0]} -> "
               f"{_tsf_predictions.index[-1]}")
     return tsf_paths, best_tsf_paths
 

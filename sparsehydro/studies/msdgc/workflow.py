@@ -6,6 +6,8 @@ calculations; all observation-derived fits use the quality-eligible training mas
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
@@ -35,6 +37,8 @@ from sparsehydro.studies.msdgc.assessment import AcceptanceContract
 from sparsehydro.studies.msdgc.events import frozen_events, snow_melt_envelope
 from sparsehydro.calibration.splits.masks import dry_weather_mask, melt_scoring_mask, storm_scoring_mask
 from sparsehydro.calibration.selection import select_peak_filtered_pareto
+
+logger = logging.getLogger(__name__)
 
 
 def _event_path(value: str | None, directory: Path, name: str) -> Path:
@@ -133,17 +137,17 @@ def prepare_pattern_data(
         prepared.train_mask &= prepared.observation_eligible
         prepared.val_mask &= prepared.observation_eligible
         data["dry_eligible"] &= prepared.observation_eligible
-        print(f"Hybrid data-quality exclusion: {int((~prepared.observation_eligible).sum()):,} rows; "
+        logger.info("%s", f"Hybrid data-quality exclusion: {int((~prepared.observation_eligible).sum()):,} rows; "
               "forcing and continuous simulation unchanged.")
     if not prepared.train_mask.any():
         raise ValueError("No quality-eligible training observations remain")
-    print(f"Dry-weather eligibility: {data.dry_eligible.sum():,} rows after {exclusion:g} dry hours.")
-    print(f"Conservative possible-melt rows: {int(possible_melt.sum()):,}; masks stay fixed.")
-    print(f"Modeling dataset: {len(data):,} steps @ {split.dt_hours * 60:g} min; "
+    logger.info("%s", f"Dry-weather eligibility: {data.dry_eligible.sum():,} rows after {exclusion:g} dry hours.")
+    logger.info("%s", f"Conservative possible-melt rows: {int(possible_melt.sum()):,}; masks stay fixed.")
+    logger.info("%s", f"Modeling dataset: {len(data):,} steps @ {split.dt_hours * 60:g} min; "
           f"{times[0]} -> {times[-1]}")
-    print(f"Warmup: {warmup_steps:,} steps; "
+    logger.info("%s", f"Warmup: {warmup_steps:,} steps; "
           f"{'synthetic ' + split.spinup_mode if spinup_steps else 'real record'}")
-    print(f"Training: {prepared.train_mask.sum():,}; validation: {prepared.val_mask.sum():,}; "
+    logger.info("%s", f"Training: {prepared.train_mask.sum():,}; validation: {prepared.val_mask.sum():,}; "
           f"last train step: {data.loc[prepared.train_mask, 'datetime'].iloc[-1]}")
     return prepared
 
@@ -188,7 +192,7 @@ def build_pattern_event_coverage(
         events = imported_event_inventory(data, train, val, prepared.event_file)
         pre, tail = 0.0, 0.0
         calibration = events.copy()
-        print(f"Overlapping approved windows: {events.overlap_previous_hours.gt(0).sum()}; not merged.")
+        logger.info("%s", f"Overlapping approved windows: {events.overlap_previous_hours.gt(0).sum()}; not merged.")
     elif source == "auto":
         # Older saved studies lack this setting; None keeps the detector defaults.
         events = frozen_events(data, train, val, reference,
@@ -222,19 +226,19 @@ def build_pattern_event_coverage(
         events, calibration, assessment, acceptance,
         rain_masks[0] | melt_masks[0], rain_masks[1] | melt_masks[1],
         *rain_masks, *melt_masks, *approved_masks, *assessment_masks, pre, tail)
-    print("MSDGC TOTAL-FLOW assessment; not the official effective-storm scorecard.")
-    print(f"Event source: {source}; file: {prepared.event_file}; broad file: {prepared.all_event_file}")
-    print(f"Assessment exclusions requested: {controls['ASSESSMENT_EXCLUDED_EVENT_IDS']}; "
+    logger.info("%s", "MSDGC TOTAL-FLOW assessment; not the official effective-storm scorecard.")
+    logger.info("%s", f"Event source: {source}; file: {prepared.event_file}; broad file: {prepared.all_event_file}")
+    logger.info("%s", f"Assessment exclusions requested: {controls['ASSESSMENT_EXCLUDED_EVENT_IDS']}; "
           f"eligible assessment events: {len(acceptance)}; broad fitting unchanged.")
-    print(f"Eligible calibration events: {int(calibration.eligible.sum())}; "
+    logger.info("%s", f"Eligible calibration events: {int(calibration.eligible.sum())}; "
           f"training storm steps: {coverage.storm_mask.sum():,}")
-    print("Added melt-window rows: train="
+    logger.info("%s", "Added melt-window rows: train="
           f"{int((melt_masks[0] & ~rain_masks[0]).sum()):,}, validation="
           f"{int((melt_masks[1] & ~rain_masks[1]).sum()):,}")
     for name, inventory in (("Assessment", assessment), ("Approved", events), ("Calibration", calibration)):
         excluded = inventory.loc[~inventory.eligible.astype(bool), ["event_id", "split", "exclusion"]]
         if len(excluded):
-            print(f"{name} exclusions:\n{excluded.to_string(index=False)}")
+            logger.info("%s", f"{name} exclusions:\n{excluded.to_string(index=False)}")
     if source == "hybrid" and not acceptance["split"].eq("train").any():
         raise ValueError("Hybrid mode needs complete approved TRAINING events for preference/reporting")
     if not coverage.storm_mask.any():
@@ -261,8 +265,8 @@ def build_pattern_model(
             window_days=modules.background_window_days, minimum_days=modules.background_minimum_days,
             max_gap_days=modules.background_max_gap_days, endpoint_hold_days=modules.background_endpoint_hold_days)
         prepared.data["background_required"] = prepared.scored_mask
-        print("RETROSPECTIVE ONLY: training-dry background includes unidentified slow inflow; no annual repetition.")
-        print(f"Background support: {background.start} to {background.end}; "
+        logger.info("%s", "RETROSPECTIVE ONLY: training-dry background includes unidentified slow inflow; no annual repetition.")
+        logger.info("%s", f"Background support: {background.start} to {background.end}; "
               f"{len(background.datetimes)} source-day anchors; "
               f"endpoint hold limit {modules.background_endpoint_hold_days} days.")
         times = pd.DatetimeIndex(prepared.data["datetime"])
@@ -270,7 +274,7 @@ def build_pattern_model(
         for label, edge in (("before", times < background.start), ("after", times > background.end)):
             mask = held & edge
             if mask.any():
-                print(f"Endpoint hold {label}: {times[mask][0]} to {times[mask][-1]}; {mask.sum()} scored rows "
+                logger.info("%s", f"Endpoint hold {label}: {times[mask][0]} to {times[mask][-1]}; {mask.sum()} scored rows "
                       f"(training {(mask & prepared.train_mask).sum()}, "
                       f"validation {(mask & prepared.val_mask).sum()}).")
     elif start > upper:
@@ -284,15 +288,15 @@ def build_pattern_model(
     signatures, options = getattr(_gwi_B_core, "nopython_signatures", ()), getattr(_gwi_B_core, "targetoptions", {})
     if simulation["REQUIRE_NUMBA"] and not signatures:
         raise RuntimeError("S/G recurrence did not compile with Numba; check NUMBA_DISABLE_JIT and restart the kernel.")
-    print(f"Compiled Numba recurrence: {bool(signatures)}; "
+    logger.info("%s", f"Compiled Numba recurrence: {bool(signatures)}; "
           f"nogil={options.get('nogil', False)}; fastmath={options.get('fastmath', False)}")
     count = sum(model.get_scalar_parameter(n).calibrate for n in model.scalar_parameter_names)
-    print(f"{count} optimized scalars; GWI={model.groundwater_enabled}; "
+    logger.info("%s", f"{count} optimized scalars; GWI={model.groundwater_enabled}; "
           f"RTK pathways={model.n_triangles}; 29 shapes estimated separately.")
     area = model.get_scalar_parameter("area_acres")
-    print(f"Area: initial={area.value:g} acres, bounds=({area.lower_bound:g}, {area.upper_bound:g}), "
+    logger.info("%s", f"Area: initial={area.value:g} acres, bounds=({area.lower_bound:g}, {area.upper_bound:g}), "
           f"calibrated={area.calibrate}")
-    print("Initial stores default to fixed zero; PARAMETER_OVERRIDES can explicitly change active stores.")
+    logger.info("%s", "Initial stores default to fixed zero; PARAMETER_OVERRIDES can explicitly change active stores.")
     return model
 
 
@@ -358,20 +362,20 @@ def build_pattern_objectives(
     events["observed_conveyance_reason"] = audit["reason"].to_numpy()
     events["con15_basis"] = "msdgc_independent_conveyance_volume_mg"
     if audit["status"].ne("defined").any():
-        print("Undefined observed conveyance-volume diagnostics:\n" + audit.loc[
+        logger.info("%s", "Undefined observed conveyance-volume diagnostics:\n" + audit.loc[
             audit["status"].ne("defined"), ["event_id", "status", "reason"]].to_string(index=False))
     for role, definition in (("objective", peak_objective), ("filter", peak_filter)):
         flag = f"{role}_selected"
         events[flag] = False
         if definition is None:
-            print(f"Training Con15 {role}: disabled")
+            logger.info("%s", f"Training Con15 {role}: disabled")
         else:
             definition.compute(observed, observed)
             indices = definition.selected_event_indices(observed)
             events.iloc[indices, events.columns.get_loc(flag)] = True
-            print(f"Con15 {role}: top {definition.top_fraction:.1%} of {len(events)} complete TRAINING storms "
+            logger.info("%s", f"Con15 {role}: top {definition.top_fraction:.1%} of {len(events)} complete TRAINING storms "
                   f"= {len(indices)} selected; validation excluded.")
-            print(events.iloc[indices][["event_id", "observed_conveyance_volume_mg"]].to_string(index=False))
+            logger.info("%s", events.iloc[indices][["event_id", "observed_conveyance_volume_mg"]].to_string(index=False))
     objectives = config.build_objectives(train, coverage.storm_mask, con15=peak_objective)
     return PatternObjectives(objectives, peak_objective, peak_filter, events)
 
@@ -394,9 +398,9 @@ def calibrate_pattern_model(
         skip_infeasible=True)
     solver = config.build_solver()
     metadata = config.solver_metadata()
-    print("Solver configuration:", metadata)
+    logger.info("%s %s", "Solver configuration:", metadata)
     if model.observed_background is not None:
-        print("Background is frozen before optimization; validation describes historical interpolation, not forecasting.")
+        logger.info("%s", "Background is frozen before optimization; validation describes historical interpolation, not forecasting.")
     started = time.perf_counter()
     result = solver.solve(problem)
     prepared.phase_seconds["joint_optimization"] = time.perf_counter() - started
@@ -413,11 +417,11 @@ def calibrate_pattern_model(
             f"lowest training conveyance-volume slope error within {allowance:g} of "
             "best normalized primary RMS score; threshold report only")
     if peak_filter is not None:
-        print(f"Near-tie primary objectives: {table.attrs['primary_objective_names']}; "
+        logger.info("%s", f"Near-tie primary objectives: {table.attrs['primary_objective_names']}; "
               f"shortlist={int(table.near_tie_eligible.sum())} of {len(table)}; "
               f"selected primary score={table.loc[selected, 'primary_score']:.6g}; "
               f"increase={table.loc[selected, 'primary_score_increase']:.6g} <= {allowance:g}")
-        print(f"Training volume-filter passes: {int(table.filter_pass.fillna(False).sum())} of {len(table)}; "
+        logger.info("%s", f"Training volume-filter passes: {int(table.filter_pass.fillna(False).sum())} of {len(table)}; "
               f"selected error={table.loc[selected, 'filter_peak_error']:.6g}")
     for name, value in zip(result.param_names, result.pareto_X[selected]):
         model.apply_flat_parameter(name, float(value))
@@ -467,15 +471,15 @@ def calibrate_pattern_model(
         peak_text = (f"conveyance-volume slope={row['con15_slope']:.4f}; Con15 error={row['con15_error']:.6g}"
                      if peak is not None else "objective volume diagnostic disabled"
                      if peak_objective is None else "volume slope/error=undefined (no complete assessment storms)")
-        print(f"{label}: total CCC={row['ccc']:.4f}; NSE={row['nse']:.4f}; "
+        logger.info("%s", f"{label}: total CCC={row['ccc']:.4f}; NSE={row['nse']:.4f}; "
               f"top fraction={selection['CON15_OBJ_FRACTION']:g}; {peak_text}")
     split_diagnostics = pd.DataFrame(diagnostics)
     table.to_csv(Path(artifact_dir) / "pareto_solutions.csv", index=False)
     prepared.phase_seconds["selected_prediction"] = time.perf_counter() - started
-    print("Verified selected objectives:", dict(zip(result.objective_names, verified)))
-    print(f"Selected snow settings: {model.snow_config}; "
+    logger.info("%s %s", "Verified selected objectives:", dict(zip(result.objective_names, verified)))
+    logger.info("%s", f"Selected snow settings: {model.snow_config}; "
           f"contributing area: {model.get_scalar_parameter('area_acres').value:.6g} acres")
-    print(f"Joint fit: {prepared.phase_seconds['joint_optimization']:.2f} s; "
+    logger.info("%s", f"Joint fit: {prepared.phase_seconds['joint_optimization']:.2f} s; "
           f"selected Pareto index {selected}; {status}; {rule}")
     return PatternCalibration(result, prediction, table, selected, rule, status,
                               peak_objective, peak_filter, events, metadata, verified,
