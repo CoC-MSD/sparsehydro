@@ -20,6 +20,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   terms of a summed output as its components. Components always add up to
   the series they belong to. See "Components and internal states" in
   `docs/composition.md`.
+- Internal states in the trace: `IAModel` records the remaining abstraction
+  capacity (`ia_available`) and, with snow, `swe`, `snowfall` and `melt`; the
+  tank models record `tank_storage` and the effective-area multiplier
+  `tank_gain`. `compute_excess_series` and the compiled loops take an optional
+  `record` and are unchanged without it (same results, same speed). The
+  existing outputs of `SoilGroundwaterStore` and `DegreeDaySnow` are labelled
+  with their roles (`S_in`, `G_in`, `SWE_in` states; recharge, infiltration,
+  melt fluxes).
 
 ## [1.0.0b1] - 2026-11-15
 

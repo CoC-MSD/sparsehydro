@@ -92,10 +92,14 @@ def _wet_step_excess_nb(ia0, k_dep, P):
     return (P - p_star) - (1.0 / k_dep - ia0 * math.exp(-k_dep * P))
 
 
+#: Series :func:`_compute_excess_core_nb` can record (see ``record`` in :meth:`IAModel.compute_excess_series`).
+IA_RECORD_KEYS = ("ia_available", "swe", "snowfall", "melt")
+
+
 @njit(cache=True, fastmath=False)
 def _compute_excess_core_nb(rainfall_mm, dt_hours, temperature, use_temp,
                             ia_max, k0, kT, theta, T_ref, k_dep, T_freeze,
-                            snow_on, snow_ddf, snow_T):
+                            snow_on, snow_ddf, snow_T, record):
     """Compiled transcription of the :meth:`IAModel.compute_excess_series` loop.
 
     ``None`` sentinels (temperature / snow_T) are passed as typed flags
@@ -104,17 +108,28 @@ def _compute_excess_core_nb(rainfall_mm, dt_hours, temperature, use_temp,
 
     The arithmetic is a line-for-line copy of the pure-Python reference and
     ``fastmath`` is off, so the output is bit-identical to it.
+
+    Returns ``(excess, ia_available, swe, snowfall, melt)``; the last four are
+    end-of-step values when *record* is true and empty otherwise, so the
+    calibration path allocates nothing extra.
     """
     n = rainfall_mm.shape[0]
     excess = np.zeros(n, dtype=np.float64)
+    m = n if record else 0
+    rec_ia = np.zeros(m, dtype=np.float64)
+    rec_swe = np.zeros(m, dtype=np.float64)
+    rec_snowfall = np.zeros(m, dtype=np.float64)
+    rec_melt = np.zeros(m, dtype=np.float64)
     ia_avail = ia_max
     swe = 0.0
     for i in range(n):
         P = rainfall_mm[i]
         dt = dt_hours[i]
         T = temperature[i] if use_temp else T_ref
+        snowfall = 0.0
+        melt = 0.0
         if snow_on:
-            swe, P, _snowfall, _melt = snow_step_nb(P, T, dt, swe, snow_T, snow_ddf)
+            swe, P, snowfall, melt = snow_step_nb(P, T, dt, swe, snow_T, snow_ddf)
         if P <= 0.0:
             if T >= T_freeze:
                 k_rec = k0 + kT * math.exp(theta * (T - T_ref))
@@ -129,7 +144,12 @@ def _compute_excess_core_nb(rainfall_mm, dt_hours, temperature, use_temp,
             ia_avail = 0.0
         elif ia_avail > ia_max:
             ia_avail = ia_max
-    return excess
+        if record:
+            rec_ia[i] = ia_avail
+            rec_swe[i] = swe
+            rec_snowfall[i] = snowfall
+            rec_melt[i] = melt
+    return excess, rec_ia, rec_swe, rec_snowfall, rec_melt
 
 
 def _compute_excess_series_fast(
@@ -145,6 +165,7 @@ def _compute_excess_series_fast(
     T_freeze,
     snow_ddf=0.0,
     snow_T=None,
+    record=None,
 ):
     """numba-backed twin of :meth:`IAModel.compute_excess_series`.
 
@@ -161,12 +182,15 @@ def _compute_excess_series_fast(
     temp_arr = (np.ascontiguousarray(temperature, dtype=np.float64)
                 if use_temp else np.empty(0, dtype=np.float64))
     snow_on = snow_T is not None
-    return _compute_excess_core_nb(
+    excess, *series = _compute_excess_core_nb(
         rainfall_mm, dt_hours, temp_arr, use_temp,
         float(ia_max), float(k0), float(kT), float(theta), float(T_ref),
         float(k_dep), float(T_freeze), snow_on, float(snow_ddf),
-        float(snow_T) if snow_on else 0.0,
+        float(snow_T) if snow_on else 0.0, record is not None,
     )
+    if record is not None:
+        record.update(zip(IA_RECORD_KEYS, series))
+    return excess
 
 
 @registry.register
@@ -328,6 +352,16 @@ class IAModel(IModel):
             description="Rainfall excess depth after initial abstraction",
             calibratable=False,
         ))
+        self.register_trace_field(FieldRecord(
+            "ia_available", units=depth_units, role="state",
+            description="Remaining initial-abstraction capacity at the end of the step"))
+        if self._snow:
+            self.register_trace_field(FieldRecord(
+                "swe", units=depth_units, role="state", description="Snowpack water equivalent"))
+            self.register_trace_field(FieldRecord(
+                "snowfall", units=depth_units, role="flux", description="Precipitation stored as snow"))
+            self.register_trace_field(FieldRecord(
+                "melt", units=depth_units, role="flux", description="Snowmelt released as liquid input"))
 
         self._state = ModelState.INITIALIZED
 
@@ -400,12 +434,17 @@ class IAModel(IModel):
             raise RuntimeError("Call prepare(data) before predict().")
 
         self._sync_from_params()
+        excess = self._run_engine()
+        self._state = ModelState.PREDICTED
+        return {"datetime": self._datetime_arr, self._excess_col: excess}
 
+    def _run_engine(self, record: dict | None = None) -> np.ndarray:
         # The compiled core is a bit-identical transcription of the reference
         # (fastmath off), so this swaps speed in without changing results.
         _engine = (_compute_excess_series_fast if _HAS_NUMBA
                    else IAModel.compute_excess_series)
-        excess = _engine(
+        kwargs = {} if record is None else {"record": record}
+        return _engine(
             rainfall_mm=self._rain_arr,
             dt_hours=self._dt_arr,
             temperature=self._temp_arr,
@@ -418,10 +457,15 @@ class IAModel(IModel):
             T_freeze=self.T_freeze,
             snow_ddf=self.snow_ddf if self._snow else 0.0,
             snow_T=self.snow_T if self._snow else None,
+            **kwargs,
         )
 
-        self._state = ModelState.PREDICTED
-        return {"datetime": self._datetime_arr, self._excess_col: excess}
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Remaining abstraction capacity (and snowpack, snowfall, melt with snow) per step."""
+        self._sync_from_params()
+        record: dict[str, np.ndarray] = {}
+        self._run_engine(record)
+        return {k: record[k] for k in self.trace_field_names}
 
     def predict(self) -> pd.DataFrame:
         """Compute rainfall excess for the prepared time series.
@@ -533,6 +577,7 @@ class IAModel(IModel):
         T_freeze: float,
         snow_ddf: float = 0.0,
         snow_T: float | None = None,
+        record: dict[str, np.ndarray] | None = None,
     ) -> np.ndarray:
         """Compute rainfall excess array for a full time series.
 
@@ -569,6 +614,10 @@ class IAModel(IModel):
         :type snow_ddf: float
         :param snow_T: Rain/snow threshold [°C], or ``None`` to disable snow.
         :type snow_T: float | None
+        :param record: Optional dict filled with end-of-step series
+            (:data:`IA_RECORD_KEYS`): ``ia_available`` (remaining abstraction
+            capacity), ``swe`` (snowpack), ``snowfall`` and ``melt``.
+        :type record: dict | None
         :returns: Rainfall excess depth series, same length as *rainfall_mm*.
         :rtype: numpy.ndarray
         """
@@ -579,14 +628,16 @@ class IAModel(IModel):
         snow_on = snow_T is not None
         swe = 0.0
         use_temp = temperature is not None
+        rec = None if record is None else {k: np.zeros(n) for k in IA_RECORD_KEYS}
 
         for i in range(n):
             P = float(rainfall_mm[i])
             dt = float(dt_hours[i])
             T = float(temperature[i]) if use_temp else T_ref
+            snowfall = melt = 0.0
 
             if snow_on:
-                swe, P, _snowfall, _melt = snow_step(P, T, dt, swe, snow_T, snow_ddf)
+                swe, P, snowfall, melt = snow_step(P, T, dt, swe, snow_T, snow_ddf)
 
             if P <= 0.0:
                 if T >= T_freeze:
@@ -600,7 +651,12 @@ class IAModel(IModel):
                 ia_avail = ia_avail * math.exp(-k_dep * P)
 
             ia_avail = max(0.0, min(ia_max, ia_avail))
+            if rec is not None:
+                for key, value in zip(IA_RECORD_KEYS, (ia_avail, swe, snowfall, melt)):
+                    rec[key][i] = value
 
+        if record is not None:
+            record.update(rec)
         return excess
 
     # ------------------------------------------------------------------

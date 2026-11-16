@@ -189,6 +189,87 @@ def test_tracing_does_not_change_later_predictions() -> None:
         np.testing.assert_array_equal(np.asarray(first[k]), np.asarray(again[k]))
 
 
+# ---------------------------------------------------------------------------- internal states
+
+
+def test_initial_abstraction_capacity_is_traced_and_matches_the_reference() -> None:
+    from sparsehydro.models.rdii import initial_abstraction as ia_mod
+
+    model = IAModel()
+    outputs, trace = run(model)
+    ia = trace["ia_available"]
+    ia_max = model.get_scalar_parameter("ia_max").value
+    assert model.get_trace_field("ia_available").role == "state"
+    assert np.all((ia >= 0.0) & (ia <= ia_max))
+    rain = forcing()["rainfall_in"].to_numpy()
+    assert ia[39] < ia[19] and ia[199] > ia[39]  # depleted by the first storm, recovered before the second
+    # compiled and reference loops record the same series, bit for bit
+    cold_then_warm = np.where(np.arange(len(rain)) < 300, -2.0, 8.0)  # snow, then melt
+    kw = dict(rainfall_mm=rain, dt_hours=np.full(len(rain), 5 / 60), temperature=cold_then_warm,
+              ia_max=0.2, k0=0.05, kT=0.02, theta=0.1, T_ref=20.0, k_dep=7.62, T_freeze=0.0,
+              snow_ddf=0.1, snow_T=3.0)
+    fast, slow = {}, {}
+    np.testing.assert_array_equal(ia_mod._compute_excess_series_fast(record=fast, **kw),
+                                  IAModel.compute_excess_series(record=slow, **kw))
+    for key in ia_mod.IA_RECORD_KEYS:
+        np.testing.assert_array_equal(fast[key], slow[key])
+    assert fast["swe"].max() > 0 and fast["melt"].sum() > 0 and fast["snowfall"].sum() > 0
+    # recording does not change the excess
+    np.testing.assert_array_equal(ia_mod._compute_excess_series_fast(**kw), ia_mod._compute_excess_series_fast(
+        record={}, **kw))
+
+
+def test_snow_states_appear_only_with_snow() -> None:
+    plain = IAModel()
+    plain.initialize()
+    assert plain.trace_field_names == ["ia_available"]
+    snowy = IAModel(snow=True)
+    data = forcing()
+    data["temperature_c"] = -2.0
+    _, trace = run(snowy, data)
+    assert {"swe", "snowfall", "melt"} <= set(trace) and trace["swe"].max() > 0
+
+
+@pytest.mark.parametrize("name", ["tank-constant", "tank-linear", "tank-sqrt"])
+def test_tank_storage_and_gain(name) -> None:
+    model = registry.create(name, V_tank=0.3, ae_min=2.0, ae_max=8.0, drain=0.02)
+    outputs, trace = run(model)
+    V, gain = trace["tank_storage"], trace["tank_gain"]
+    assert np.all((V >= 0) & (V <= 0.3)) and V.max() > 0
+    assert np.all((gain >= 2.0 - 1e-12) & (gain <= 8.0 + 1e-12))
+    rain = forcing()["rainfall_in"].to_numpy()
+    np.testing.assert_array_equal(outputs["p_excess_in"], np.maximum(rain * gain, 0.0))
+
+
+def test_existing_store_outputs_carry_their_roles() -> None:
+    from sparsehydro.models.abstraction import SoilGroundwaterStore
+    from sparsehydro.models.forcing import DegreeDaySnow
+
+    store = SoilGroundwaterStore()
+    store.initialize()
+    roles = {f.name: f.role for f in store.output_fields}
+    assert roles["S_in"] == roles["G_in"] == "state"
+    assert roles["recharge_in"] == roles["gwi_in"] == "flux" and roles["gwi_cfs"] == "output"
+    snow = DegreeDaySnow()
+    snow.initialize()
+    assert {f.name: f.role for f in snow.output_fields}["SWE_in"] == "state"
+    # inside a composite the states keep their role
+    comp = build_model({"type": "composite", "components": {
+        "snow": {"type": "degree-day-snow"},
+        "store": {"type": "soil-groundwater-store", "inputs": {"liquid_input_in": "snow.liquid_input_in"}}},
+        "outputs": {"gwi_cfs": "store.gwi_cfs"}})
+    meta = {f.name: f.role for f in comp.trace_fields}
+    assert meta["store.S_in"] == meta["snow.SWE_in"] == "state" and meta["store.recharge_in"] == "flux"
+
+
+def test_rdii_forwards_abstraction_states() -> None:
+    model = RDIIModel(ia_model=IAModel(snow=True))
+    _, trace = run(model)
+    assert {"ia.ia_available", "ia.swe", "ia.melt"} <= set(model.trace_field_names)
+    assert model.get_trace_field("ia.swe").role == "state"
+    assert len(trace["ia.ia_available"]) == len(trace["rdii_cfs"])
+
+
 def test_metadata_table() -> None:
     model = RDIIModel(ia_model=ExternalExcess(source_column="rainfall_in"))
     model.initialize()

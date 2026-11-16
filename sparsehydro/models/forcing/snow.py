@@ -174,8 +174,9 @@ class DegreeDaySnow(IModel):
                 self.register_scalar_parameter(ScalarParameter(
                     name, value, lower, upper, units=units, description=description))
         self.register_output_field(FieldRecord("datetime", description="Simulation time step"))
+        roles = {"SWE_in": "state", "liquid_input_in": "output"}  # the rest are fluxes
         for name in self.OUTPUTS:
-            self.register_output_field(FieldRecord(name, units="in"))
+            self.register_output_field(FieldRecord(name, units="in", role=roles.get(name, "flux")))
         self._cache = None
         self._state = ModelState.INITIALIZED
 

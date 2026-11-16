@@ -38,11 +38,20 @@ _LAW_CONSTANT, _LAW_LINEAR, _LAW_SQRT = 0, 1, 2
 
 
 @njit(cache=True)
-def _tank_kernel(rain, V_tank, ae_min, ae_max, drain, n_substeps, law):  # pragma: no cover - compiled
-    """Advance the tank; same operation order as the Python loop (bit-identical)."""
-    excess = np.zeros(rain.shape[0])
+def _tank_kernel(rain, V_tank, ae_min, ae_max, drain, n_substeps, law, record=False):  # pragma: no cover - compiled
+    """Advance the tank; same operation order as the Python loop (bit-identical).
+
+    Returns ``(excess, storage, gain)``: tank storage at the end of each step
+    and the effective-area multiplier applied in it when *record* is true,
+    empty arrays otherwise.
+    """
+    n = rain.shape[0]
+    excess = np.zeros(n)
+    m = n if record else 0
+    rec_V = np.zeros(m)
+    rec_ae = np.zeros(m)
     V = 0.0
-    for i in range(rain.shape[0]):
+    for i in range(n):
         R = rain[i]
         w = min(max(V / V_tank, 0.0), 1.0)
         ae = ae_max - w * (ae_max - ae_min)
@@ -58,7 +67,10 @@ def _tank_kernel(rain, V_tank, ae_min, ae_max, drain, n_substeps, law):  # pragm
                 full = min(drain * np.sqrt(max(V, 0.0)), V)
             V -= full / n_substeps
             V = min(max(V, 0.0), V_tank)
-    return excess
+        if record:
+            rec_V[i] = V
+            rec_ae[i] = ae
+    return excess, rec_V, rec_ae
 
 
 class TankAbstractionModel(IModel):
@@ -153,6 +165,12 @@ class TankAbstractionModel(IModel):
             description="Effective rainfall depth after tank abstraction",
             calibratable=False,
         ))
+        self.register_trace_field(FieldRecord(
+            "tank_storage", units=depth_units, role="state",
+            description="Tank storage at the end of the step"))
+        self.register_trace_field(FieldRecord(
+            "tank_gain", role="state",
+            description="Effective-area multiplier applied in the step (ae_max when empty, ae_min when full)"))
         self._state = ModelState.INITIALIZED
 
     def inequality_constraints(self) -> list[float]:
@@ -203,26 +221,35 @@ class TankAbstractionModel(IModel):
         """
         if self._prepared_df is None:
             raise RuntimeError("Call prepare(data) before predict().")
-        rain = self._rain
+        excess, _, _ = self._advance(record=False)
+        self._state = ModelState.PREDICTED
+        return {"datetime": self._datetime, self._excess_col: excess}
 
+    def _advance(self, record: bool) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        rain = self._rain
         V_tank = max(self.get_scalar_parameter("tank_V").value, 1e-9)
         ae_min = self.get_scalar_parameter("tank_ae_min").value
         ae_max = self.get_scalar_parameter("tank_ae_max").value
         drain = self.get_scalar_parameter(self._drain_param_name).value
         n = self._n_substeps
-
         if self._drain_law is not None:
-            excess = _tank_kernel(rain, float(V_tank), float(ae_min),
-                                  float(ae_max), float(drain), int(n), int(self._drain_law))
-        else:
-            excess = self._advance_python(rain, V_tank, ae_min, ae_max, drain, n)
+            return _tank_kernel(rain, float(V_tank), float(ae_min), float(ae_max), float(drain), int(n),
+                                int(self._drain_law), record)
+        return self._advance_python(rain, V_tank, ae_min, ae_max, drain, n, record)
 
-        self._state = ModelState.PREDICTED
-        return {"datetime": self._datetime, self._excess_col: excess}
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Tank storage and the effective-area multiplier per step."""
+        _, storage, gain = self._advance(record=True)
+        return {"tank_storage": storage, "tank_gain": gain}
 
-    def _advance_python(self, rain, V_tank, ae_min, ae_max, drain, n) -> np.ndarray:
-        """Reference loop using :meth:`_drainage_full` (custom drainage laws)."""
+    def _advance_python(self, rain, V_tank, ae_min, ae_max, drain, n, record=False):
+        """Reference loop using :meth:`_drainage_full` (custom drainage laws).
+
+        Returns ``(excess, storage, gain)`` like :func:`_tank_kernel`.
+        """
         excess = np.zeros(len(rain))
+        m = len(rain) if record else 0
+        rec_V, rec_ae = np.zeros(m), np.zeros(m)
         V = 0.0
         for i, R in enumerate(rain):
             w = min(max(V / V_tank, 0.0), 1.0)
@@ -233,7 +260,10 @@ class TankAbstractionModel(IModel):
                 V += r_sub
                 V -= self._drainage_full(V, drain) / n
                 V = min(max(V, 0.0), V_tank)
-        return excess
+            if record:
+                rec_V[i] = V
+                rec_ae[i] = ae
+        return excess, rec_V, rec_ae
 
     def predict(self) -> pd.DataFrame:
         """Advance the tank over the series and return effective rainfall.

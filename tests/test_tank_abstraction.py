@@ -100,9 +100,13 @@ def test_compiled_kernel_matches_python_reference(cls):
     m.prepare(df)
     fast = m.predict_arrays()["p_excess_in"]
     p = {k: m.get_scalar_parameter(k).value for k in m.scalar_parameter_names}
-    ref = m._advance_python(df["rainfall_in"].to_numpy(dtype=float), p["tank_V"], p["tank_ae_min"],
-                            p["tank_ae_max"], p[m._drain_param_name], m._n_substeps)
+    ref, ref_V, ref_ae = m._advance_python(df["rainfall_in"].to_numpy(dtype=float), p["tank_V"],
+                                           p["tank_ae_min"], p["tank_ae_max"], p[m._drain_param_name],
+                                           m._n_substeps, True)
     np.testing.assert_array_equal(fast, ref)
+    trace = m.predict_trace()  # recorded states match the reference too
+    np.testing.assert_array_equal(trace["tank_storage"], ref_V)
+    np.testing.assert_array_equal(trace["tank_gain"], ref_ae)
 
 
 def test_custom_drainage_law_runs_in_python():

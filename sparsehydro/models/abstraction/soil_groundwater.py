@@ -167,16 +167,19 @@ class SoilGroundwaterStore(IModel):
             self.register_inequality_constraint(ConstraintRecord(
                 "k_G_lt_k0", "Deep store slower than S (k_G - k0 <= 0)"))
         self.register_output_field(FieldRecord("datetime", description="Simulation time step"))
-        for name, units, description in (
-            ("S_in", "in", "Soil store depth"), ("G_in", "in", "Deep store depth"),
-            ("p_excess_in", "in", "Rainfall excess"), ("G_at_cap", "-", "1 where G is saturated"),
-            ("et_in", "in", "Evapotranspiration from S"), ("recharge_in", "in", "Liquid input retained by S"),
-            ("gwi_in", "in", "Groundwater infiltration (release + spill)"),
-            ("gwi_release_in", "in", "Slow release from G"), ("gwi_spill_in", "in", "Overflow from a full G"),
-            ("gwi_cfs", "cfs", "Groundwater infiltration flow"),
-            ("budget_error_in", "in", "Cumulative store mass-balance error"),
+        for name, units, description, role in (
+            ("S_in", "in", "Soil store depth", "state"), ("G_in", "in", "Deep store depth", "state"),
+            ("p_excess_in", "in", "Rainfall excess", "flux"),
+            ("G_at_cap", "-", "1 where G is saturated", "state"),
+            ("et_in", "in", "Evapotranspiration from S", "flux"),
+            ("recharge_in", "in", "Liquid input retained by S", "flux"),
+            ("gwi_in", "in", "Groundwater infiltration (release + spill)", "flux"),
+            ("gwi_release_in", "in", "Slow release from G", "flux"),
+            ("gwi_spill_in", "in", "Overflow from a full G", "flux"),
+            ("gwi_cfs", "cfs", "Groundwater infiltration flow", "output"),
+            ("budget_error_in", "in", "Cumulative store mass-balance error", "state"),
         ):
-            self.register_output_field(FieldRecord(name, units=units, description=description))
+            self.register_output_field(FieldRecord(name, units=units, description=description, role=role))
         self._state = ModelState.INITIALIZED
 
     def inequality_constraints(self) -> list[float]:
