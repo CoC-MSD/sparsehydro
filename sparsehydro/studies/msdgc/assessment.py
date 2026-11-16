@@ -10,7 +10,12 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
-from sparsehydro.metrics.functions import concordance_correlation, peak_regression_slope, top_peak_indices
+from sparsehydro.metrics.functions import (
+    concordance_correlation,
+    max_window_sum,
+    peak_regression_slope,
+    top_peak_indices,
+)
 from sparsehydro.metrics.objectives import Con15
 
 
@@ -144,14 +149,8 @@ def _zone_window(
         result["reason"] = "Non-finite flow or MSDGC invalid marker in event scan"
     else:
         bins = q * dt_hours * CFS_H_TO_MG
-        # Match the native moving sum, including first-winner ties and final endpoint.
-        current = float(bins[:count].sum())
-        best, position = current, 0
-        for i in range(count, len(bins)):
-            current -= float(bins[i - count])
-            current += float(bins[i])
-            if current > best:
-                best, position = current, i - count + 1
+        # The native moving sum, including first-winner ties and final endpoint.
+        best, position = max_window_sum(bins, count)
         result.update(volume_mg=round(best, 4), window_start_idx=start + position,
                       window_end_idx=start + position + count - 1, status="defined")
     return result

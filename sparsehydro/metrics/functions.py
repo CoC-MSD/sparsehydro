@@ -37,6 +37,9 @@ __all__ = [
     "top_peak_indices",
     "peak_regression_slope",
     "fit_summary",
+    "max_window_sum",
+    "sum_above",
+    "paired_summary",
 ]
 
 
@@ -242,6 +245,68 @@ def peak_regression_slope(observed_peaks, modeled_peaks) -> float:
         return float("nan")
     denominator = float(x @ x)
     return float(x @ y / denominator) if denominator > 0 else float("nan")
+
+
+def max_window_sum(values, window: int) -> tuple[float, int]:
+    """Largest sum over *window* consecutive values, and where it starts.
+
+    A running sum is slid one step at a time; on ties the earliest window wins
+    (the rule of the MSDGC assessment tool's moving volumes). Multiply by the
+    time step to turn a flow sum into a volume.
+
+    :param values: 1-D series (finite values).
+    :param window: Number of consecutive samples, ``1 <= window <= len(values)``.
+    :returns: ``(sum, start index)``.
+    :raises ValueError: For an empty series or a window outside ``[1, len(values)]``.
+    """
+    v = np.asarray(values, dtype=float)
+    if v.ndim != 1 or not 1 <= int(window) <= v.size:
+        raise ValueError(f"window must be in [1, {v.size}] for a 1-D series; got {window!r}")
+    window = int(window)
+    current = float(v[:window].sum())
+    best, position = current, 0
+    for i in range(window, v.size):
+        current -= float(v[i - window])
+        current += float(v[i])
+        if current > best:
+            best, position = current, i - window + 1
+    return best, position
+
+
+def sum_above(values, threshold: float) -> float:
+    """Sum of the parts of *values* above *threshold*: ``sum(max(v - threshold, 0))``.
+
+    Multiply by the time step for the volume above a flow rate (e.g. a system
+    capacity). Non-finite values are ignored.
+    """
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    return float(np.sum(np.clip(v - float(threshold), 0.0, None)))
+
+
+def paired_summary(observed, predicted) -> dict[str, float]:
+    """Agreement of paired values (e.g. per-event volumes) for scatter plots and reports.
+
+    :returns: ``n``, ``ccc`` (Lin), ``r2``, least-squares ``slope`` and
+        ``intercept`` of predicted on observed, ``slope0`` (zero-intercept slope,
+        as for Con15), ``mean_ratio`` (mean predicted / mean observed). Undefined
+        entries are NaN.
+    """
+    obs, pred = _pair(observed, predicted)
+    keep = np.isfinite(obs) & np.isfinite(pred)
+    obs, pred = obs[keep], pred[keep]
+    out = {"n": float(obs.size), "ccc": math.nan, "r2": math.nan, "slope": math.nan, "intercept": math.nan,
+           "slope0": peak_regression_slope(obs, pred), "mean_ratio": math.nan}
+    if obs.size >= 2:
+        out["ccc"] = concordance_correlation(obs, pred, undefined="nan")
+        if np.var(obs) > 0:
+            slope, intercept = np.polyfit(obs, pred, 1)
+            out["slope"], out["intercept"] = float(slope), float(intercept)
+            if np.var(pred) > 0:
+                out["r2"] = float(np.corrcoef(obs, pred)[0, 1] ** 2)
+    if obs.size and np.mean(obs) != 0:
+        out["mean_ratio"] = float(np.mean(pred) / np.mean(obs))
+    return out
 
 
 def fit_summary(observed, predicted) -> dict[str, float]:

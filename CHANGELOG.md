@@ -8,6 +8,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ### Added
 
+- `sparsehydro.metrics`: `max_window_sum` (largest moving-window sum, earliest
+  window on ties), `sum_above` (amount above a threshold), `paired_summary`
+  (CCC, r², slopes and mean ratio of paired values, e.g. event volumes) and
+  `metrics.scorecard` (`Criterion`, `Scorecard`): criteria with pass and fail
+  bands graded pass / conditional / fail. The MSDGC zone volumes use
+  `max_window_sum` (same results). Lin's CCC is tested against the worked
+  example of the MSDGC Modeling Guidelines (Rev 5.8, Table 7-1).
+
 - Model traces, a secondary output for plotting and checking:
   `IModel.predict_trace()` returns the outputs plus every registered trace
   field (`register_trace_field`, `trace_fields`, `trace_field_metadata`).
