@@ -10,7 +10,7 @@ Name                        Solver
 ``platypus``                :class:`PlatypusSolver` (pass ``algorithm_class``)
 ``pso``                     :class:`ParticleSwarmSolver`
 ``cmaes``                   :class:`PlatypusCmaEsSolver`
-``pymoo_nsga2``             :class:`NSGAIISolver` (pymoo)
+``pymoo_nsga2``             :class:`NSGAIISolver` (pymoo; deprecated, needs ``[pymoo]``)
 ``differential_evolution``  :class:`ScipySolver` (differential evolution)
 ``scipy``                   :class:`ScipySolver` (pass ``method``)
 ==========================  ==================================================

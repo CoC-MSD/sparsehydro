@@ -753,6 +753,10 @@ class TestNSGAIISolver(unittest.TestCase):
         result = solver.solve(self.problem)
         self.assertIsInstance(result, CalibrationResult)
 
+    def test_is_deprecated_in_favour_of_platypus_nsga2(self):
+        with self.assertWarnsRegex(DeprecationWarning, "'nsga2' solver"):
+            self.NSGAIISolver(pop_size=4, n_gen=1)
+
     def test_result_has_history(self):
         solver = self.NSGAIISolver(pop_size=20, n_gen=5, seed=0)
         result = solver.solve(self.problem)

@@ -44,12 +44,15 @@ dependencies = [
     "requests>=2.31",
     "requests-toolbelt>=1.0",
     "torch>=2.0",
-    "pymoo>=0.6",
     "plotly>=5.0",
     "platypus-opt>=1.0",
 ]
 
 [project.optional-dependencies]
+# Deprecated pymoo NSGA-II (NSGAIISolver, solver "pymoo_nsga2"); the "nsga2" solver uses Platypus.
+pymoo = [
+    "pymoo>=0.6",
+]
 notebook = [
     "ipykernel>=6.0",
     "numba>=0.60",
@@ -79,6 +82,7 @@ dev = [
     "pytest>=7.0",
     "pytest-cov",
     "sparsehydro[docs]",
+    "sparsehydro[pymoo]",
     "sparsehydro[speed]",
     "sparsehydro[parallel]",
     "sparsehydro[excel]",

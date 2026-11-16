@@ -56,6 +56,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   with their roles (`S_in`, `G_in`, `SWE_in` states; recharge, infiltration,
   melt fluxes).
 
+### Changed
+
+- pymoo is no longer installed with sparsehydro: it moves to the optional
+  `pymoo` extra (`pip install sparsehydro[pymoo]`; included in `dev`). The
+  `"nsga2"` solver already uses Platypus's NSGA-II.
+
+### Deprecated
+
+- `NSGAIISolver` and the `"pymoo_nsga2"` solver (pymoo's NSGA-II) emit a
+  `DeprecationWarning` and will be removed in a later release; use the
+  `"nsga2"` solver (`n_evaluations = pop_size * n_gen` gives a comparable
+  budget).
+
 ## [1.0.0b1] - 2026-11-15
 
 First beta of 1.0.0: the public API (models and the registry, composition and

@@ -62,7 +62,7 @@ Public API
    * - :class:`ISolver`
      - Abstract solver interface
    * - :class:`NSGAIISolver`
-     - NSGA-II (requires pymoo)
+     - NSGA-II via pymoo (deprecated; use the ``"nsga2"`` solver, Platypus; needs ``sparsehydro[pymoo]``)
    * - :class:`ParticleSwarmSolver`
      - SMPSO / OMOPSO (requires platypus-opt)
    * - :class:`PlatypusSolver`
