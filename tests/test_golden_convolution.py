@@ -19,6 +19,14 @@ any change of formula, parameter handling or masking would produce.
     a difference of two cumulative responses divided by ``dt``, so its absolute
     round-off is a few ``eps / dt`` (about 3e-15 at 5 minutes); ``UH_ATOL``
     covers that.
+``TRUNCATED_UH_RTOL``
+    Kernels cut at the duration cap (``cases.TRUNCATION_ACTIVE``) are
+    renormalised by the cumulative response at the cap, which for these cases
+    lies deep in the lower tail of the incomplete gamma or lognormal
+    distribution where ``scipy.special`` is accurate to ~1e-13 relative, not to
+    the last bit; dividing by it amplifies that (5e-12 seen on macOS arm64),
+    so they are pinned to ``rtol=1e-10``.  Their shape is checked separately
+    by ``test_truncated_kernels_are_finite_bounded_and_unit_area``.
 ``RDII_RTOL``
     RDII predictions may shift at FFT round-off level.
 
@@ -48,6 +56,9 @@ RDII_ATOL = 1e-12
 # across platforms; kernel ordinates carry absolute round-off of a few eps/dt.
 UH_RTOL = 1e-12
 UH_ATOL = 1e-13
+
+# Kernels truncated at the duration cap and renormalised by a deep-tail CDF value.
+TRUNCATED_UH_RTOL = 1e-10
 
 # Objective pins: NumPy reductions group sums differently on different CPUs.
 OBJECTIVE_RTOL = 1e-12
@@ -113,12 +124,13 @@ def assert_matches_pin(got: np.ndarray, want: np.ndarray, key: str, *,
     )
 
 
-def assert_uh_close(got: np.ndarray, want: np.ndarray, key: str) -> None:
-    """Assert a unit-hydrograph-derived result matches its pin to UH_RTOL."""
+def assert_uh_close(got: np.ndarray, want: np.ndarray, key: str, *,
+                    rtol: float = UH_RTOL) -> None:
+    """Assert a unit-hydrograph-derived result matches its pin (default UH_RTOL)."""
     got = np.asarray(got, dtype=float)
     want = np.asarray(want, dtype=float)
     assert got.shape == want.shape, f"{key}: shape changed {want.shape} -> {got.shape}"
-    np.testing.assert_allclose(got, want, rtol=UH_RTOL, atol=UH_ATOL, equal_nan=True,
+    np.testing.assert_allclose(got, want, rtol=rtol, atol=UH_ATOL, equal_nan=True,
                                err_msg=f"{key}: drifted from its pin")
 
 
@@ -141,7 +153,8 @@ def test_kernels_pinned():
             if key not in want:
                 pytest.fail(f"fixture missing key {key!r}; regenerate the archive")
             m = C.build(model_name, params)
-            assert_uh_close(m.get_kernel(dt), want[key], key)
+            rtol = TRUNCATED_UH_RTOL if case_id in C.TRUNCATION_ACTIVE else UH_RTOL
+            assert_uh_close(m.get_kernel(dt), want[key], key, rtol=rtol)
             checked += 1
     assert checked > 0
 
