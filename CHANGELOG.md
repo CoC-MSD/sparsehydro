@@ -15,6 +15,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   bands graded pass / conditional / fail. The MSDGC zone volumes use
   `max_window_sum` (same results). Lin's CCC is tested against the worked
   example of the MSDGC Modeling Guidelines (Rev 5.8, Table 7-1).
+- `sparsehydro.studies.msdgc.scorecard.assess_calibration`: the MSDGC
+  calibration scorecard of the Modeling Guidelines Rev 5.8 (Volume II 6.4 and
+  7.1): storm volume with the base flow adjusted to each storm over the 24 h
+  before it (or total volume), zone volumes, Lin's CCC per zone and the Cinci
+  score for all, critical (April-July) and other months, Con15 as a percent
+  error, Qcritical at four levels from ODWF-A (Table 7-2; Qc1 graded), and the
+  pass / conditional / fail grade, with warnings for any missing input (the
+  result is then not official). `TOOL_ZONES` (the v5.0.5 tool, treatment
+  capped at 24 h) and `GUIDELINE_ZONES` (no cap). The existing total-flow
+  `MSDGCAssessment` is unchanged.
 
 - Model traces, a secondary output for plotting and checking:
   `IModel.predict_trace()` returns the outputs plus every registered trace

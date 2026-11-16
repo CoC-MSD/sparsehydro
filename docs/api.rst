@@ -211,6 +211,13 @@ Per-Event Scores
    :members:
    :show-inheritance:
 
+Scorecards
+~~~~~~~~~~
+
+.. automodule:: sparsehydro.metrics.scorecard
+   :members:
+   :show-inheritance:
+
 
 ----
 
@@ -1067,6 +1074,10 @@ example of composing the library.
    :show-inheritance:
 
 .. automodule:: sparsehydro.studies.msdgc.assessment
+   :members:
+   :show-inheritance:
+
+.. automodule:: sparsehydro.studies.msdgc.scorecard
    :members:
    :show-inheritance:
 
