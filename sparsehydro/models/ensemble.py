@@ -248,6 +248,12 @@ class EnsembleModel(IModel):
             calibratable=True,
         ))
 
+        if self._mode == "sum":  # weighted terms add up to the combined output
+            for alias in self._aliases:
+                self.register_trace_field(FieldRecord(
+                    name=f"{alias}_contribution", role="component", component_of=self._output_name,
+                    description=f"Weighted contribution of component '{alias}' to {self._output_name}"))
+
         if self._normalize_weights:
             w_labels = " + ".join(f"w_{i}" for i in range(1, n + 1))
             self.register_inequality_constraint(ConstraintRecord(
@@ -340,6 +346,14 @@ class EnsembleModel(IModel):
 
         self._state = ModelState.PREDICTED
         return out
+
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Weighted contribution of each component (sum mode); they add up to the combined output."""
+        if self._mode != "sum":
+            return {}
+        return {f"{alias}_contribution": self.get_scalar_parameter(f"w_{i}").value
+                * np.asarray(outputs[f"{alias}_output"], dtype=float)
+                for i, alias in enumerate(self._aliases, 1)}
 
     def predict(self) -> pd.DataFrame:
         """Sync parameters, run each child, and return the combined output.

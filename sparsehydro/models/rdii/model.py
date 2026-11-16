@@ -309,6 +309,18 @@ class RDIIModel(IModel):
             description="Rainfall excess depth after initial abstraction",
             calibratable=False,
         ))
+        # Trace: each unit hydrograph's flow (they sum to rdii_cfs) and the
+        # abstraction model's own trace under "ia.".
+        for i, uh in enumerate(self._uh_components, 1):
+            self.register_trace_field(FieldRecord(
+                name=f"rdii_component_{i}", units="CFS", role="component", component_of="rdii_cfs",
+                description=f"RDII flow routed through unit hydrograph {i} ({type(uh).__name__})",
+            ))
+        for field in self._ia_model.trace_fields:
+            self.register_trace_field(FieldRecord(
+                name=f"ia.{field.name}", units=field.units, description=field.description, role=field.role,
+                component_of=f"ia.{field.component_of}" if field.component_of else "",
+            ))
 
         self._state = ModelState.INITIALIZED
 
@@ -443,6 +455,25 @@ class RDIIModel(IModel):
         }
         out.update(components)
         return out
+
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Flow of each unit hydrograph (summing to ``rdii_cfs``) and the abstraction model's trace."""
+        p_excess = np.asarray(outputs[self._excess_col], dtype=float)
+        n = len(p_excess)
+        scale = self.get_scalar_parameter("area_acres").value * self._depth_to_cfs
+        trace: dict[str, np.ndarray] = {}
+        for i, uh in enumerate(self._uh_components, 1):
+            name = f"rdii_component_{i}"
+            if name in outputs:  # already returned with component_outputs=True
+                trace[name] = outputs[name]
+                continue
+            R_i = self.get_scalar_parameter(f"R_{i}").value
+            trace[name] = R_i * convolve_causal(p_excess, uh.get_kernel(self._dt_hours), n_out=n) * scale
+        ia_fields = self._ia_model.trace_field_names
+        if ia_fields:
+            ia_trace = self._ia_model._trace_arrays({"datetime": outputs["datetime"], self._excess_col: p_excess})
+            trace.update({f"ia.{k}": v for k, v in ia_trace.items()})
+        return trace
 
     def predict(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
         """Compute RDII by convolving P_excess with each UH component.

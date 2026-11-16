@@ -330,6 +330,38 @@ class CompositeModel(IModel):
                 out_name, units=record.units if record else "",
                 description=record.description if record else "",
                 calibratable=True))
+        self._plan_trace()
+
+    def _plan_trace(self) -> None:
+        """Register every child output and trace field as ``child.field``.
+
+        Terms of a summed output become its components (``component_of`` the
+        output); other child outputs are fluxes; child trace fields keep their
+        role, with ``component_of`` re-addressed into this composite.
+        """
+        sum_terms: dict[str, str] = {}
+        for out_name, kind, terms in self._output_plan:
+            if kind == "sum":
+                for child, field in terms:
+                    if child != _DATA:
+                        sum_terms.setdefault(f"{child}.{field}", out_name)
+        for name in self._run_order or list(self._components):
+            child = self._components[name]
+            for f in child.output_fields:
+                if f.name == "datetime":
+                    continue
+                address = f"{name}.{f.name}"
+                if address in self._output_fields:
+                    continue
+                owner = sum_terms.get(address)
+                role = "component" if owner else (f.role if f.role != "output" else "flux")
+                self.register_trace_field(FieldRecord(
+                    address, units=f.units, description=f.description, role=role,
+                    component_of=owner or (f"{name}.{f.component_of}" if role == "component" else "")))
+            for f in child.trace_fields:
+                self.register_trace_field(FieldRecord(
+                    f"{name}.{f.name}", units=f.units, description=f.description, role=f.role,
+                    component_of=f"{name}.{f.component_of}" if f.component_of else ""))
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -416,6 +448,7 @@ class CompositeModel(IModel):
                           else results[s_child][s_field])
                 child.set_input(field, source)
             results[name] = child.predict_arrays()
+        self._last_results = results  # a reference, kept for predict_trace (no copy, no cost)
 
         def lookup(child: str, field: str) -> np.ndarray:
             if child == _DATA:
@@ -440,6 +473,22 @@ class CompositeModel(IModel):
             out[out_name] = acc
         self._state = ModelState.PREDICTED
         return out
+
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Each child's outputs and trace from the run that produced *outputs*, as ``child.field``."""
+        results = getattr(self, "_last_results", None)
+        if results is None:
+            raise RuntimeError("Call predict_arrays() before tracing.")
+        trace: dict[str, np.ndarray] = {}
+        for name in self._run_order:
+            child = self._components[name]
+            child_out = results[name]
+            for field, values in child_out.items():
+                if field != "datetime":
+                    trace[f"{name}.{field}"] = values
+            if child.trace_field_names:
+                trace.update({f"{name}.{k}": v for k, v in child._trace_arrays(child_out).items()})
+        return {k: v for k, v in trace.items() if k in self.__dict__.get("_trace_fields", {})}
 
     def predict(self) -> pd.DataFrame:
         """Return ``pd.DataFrame(self.predict_arrays())``."""

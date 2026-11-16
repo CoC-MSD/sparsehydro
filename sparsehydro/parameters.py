@@ -167,6 +167,18 @@ class FieldRecord:
         flow-rate or quantity directly comparable to an observed signal.
         Diagnostic columns (depth, excess, datetime) should be ``False``.
     :type calibratable: bool
+    :param role: What the series is, for plotting and checks (see
+        :data:`FIELD_ROLES`): ``"output"`` (a model result, the default),
+        ``"component"`` (an additive part of another series, named by
+        *component_of*), ``"state"`` (a storage or level at the end of each
+        step, e.g. soil moisture or remaining abstraction) or ``"flux"`` (a
+        rate or per-step amount moving between stores, e.g. recharge or melt).
+        Trace fields (:meth:`~sparsehydro.models.IModel.register_trace_field`)
+        use the last three.
+    :type role: str
+    :param component_of: For ``role="component"``: the series this one adds up
+        to, in the same model (components of one series sum to it).
+    :type component_of: str
 
     Example::
 
@@ -191,6 +203,20 @@ class FieldRecord:
     units: str = ""
     description: str = ""
     calibratable: bool = False
+    role: str = "output"
+    component_of: str = ""
+
+    def __post_init__(self) -> None:
+        if self.role not in FIELD_ROLES:
+            raise ValueError(f"FieldRecord {self.name!r}: role must be one of {FIELD_ROLES}; got {self.role!r}")
+        if self.component_of and self.role != "component":
+            raise ValueError(f"FieldRecord {self.name!r}: component_of is only meaningful with role='component'")
+        if self.role == "component" and not self.component_of:
+            raise ValueError(f"FieldRecord {self.name!r}: a component must name the series it adds up to")
+
+
+#: Roles a :class:`FieldRecord` can have (see its ``role`` parameter).
+FIELD_ROLES: tuple[str, ...] = ("output", "component", "state", "flux")
 
 
 @dataclass

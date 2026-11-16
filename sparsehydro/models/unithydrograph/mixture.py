@@ -20,8 +20,9 @@ from typing import ClassVar, Sequence
 
 import numpy as np
 
-from ...parameters import ConstraintRecord, ScalarParameter
+from ...parameters import ConstraintRecord, FieldRecord, ScalarParameter
 from ...registry import registry
+from ..convolution import convolve_causal
 from .base import UnitHydrographBase
 from .models import GammaUH
 
@@ -82,6 +83,33 @@ class MixtureUH(UnitHydrographBase):
     def components(self) -> list[UnitHydrographBase]:
         """The component unit hydrographs."""
         return list(self._components)
+
+    def initialize(self) -> None:
+        """Register parameters and outputs, plus one trace component per mixture part."""
+        super().initialize()
+        for comp, prefix in zip(self._components, self._prefixes):
+            self.register_trace_field(FieldRecord(
+                f"{prefix}{self._output_column}", role="component", component_of=self._output_column,
+                description=f"Flow through mixture part {prefix.rstrip('_')} ({type(comp).__name__})"))
+
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Flow through each part; the parts add up to the predicted flow.
+
+        The predicted kernel is apportioned step by step in proportion to each
+        part's weighted kernel, so truncation and renormalisation of the
+        mixture apply to the parts exactly as to the whole.
+        """
+        n = self._n
+        total = self._ordinates(self._dt_hours, n)
+        parts = self.component_kernels(self._dt_hours, len(total))
+        parts.pop("combined")
+        raw = np.array(list(parts.values()), dtype=float)
+        s = raw.sum(axis=0)
+        share = np.divide(raw, s, out=np.zeros_like(raw), where=s > 0)
+        share[0, s <= 0] = 1.0  # steps no part claims stay in the first, so the parts still sum to the whole
+        amp = self.amplitude()
+        return {f"{prefix}{self._output_column}": amp * convolve_causal(self._rain, share[i] * total, n_out=n)
+                for i, prefix in enumerate(self._prefixes)}
 
     # ------------------------------------------------------------------
     # Parameters

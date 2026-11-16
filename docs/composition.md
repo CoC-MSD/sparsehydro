@@ -180,6 +180,42 @@ point, not a different kind of model. Every parameter stays configurable.
   and a sanitary baseline, giving
   `total_cfs = sanitary + groundwater infiltration + RDII`.
 
+## Components and internal states
+
+Besides its outputs, every model can report a *trace*: the parts its outputs
+are made of and the internal states behind them. `predict_arrays()` is
+unchanged (calibration never computes the trace); `predict_trace()` runs the
+model once and returns the outputs plus every trace field:
+
+```python
+model = build_model(config)          # e.g. the composite above
+model.prepare(data)
+trace = model.predict_trace()
+model.trace_field_metadata()         # field, role, component_of, units, description
+```
+
+Each trace field is a {class}`~sparsehydro.parameters.FieldRecord` with a
+`role`:
+
+| Role | Meaning | Examples |
+| --- | --- | --- |
+| `component` | An additive part of another series, named by `component_of`; the components of a series sum to it. | each unit hydrograph of an RDII model (`rdii_component_1`, ...); each part of a mixture or peak-tail UH (`peak_Q_pred`, `tail_Q_pred`); each term of a composite `sum` output |
+| `state` | A storage or level at the end of each step. | remaining initial abstraction, tank storage, soil and groundwater stores, snowpack |
+| `flux` | A rate or per-step amount moving between stores. | rainfall excess, melt, recharge, groundwater infiltration |
+
+A composite reports each child's outputs and trace under `child.field`
+(`rdii.rdii_component_2`, `ia.p_excess_in`), at any depth of nesting, and marks
+the terms of a summed output as its components. So for the model in the
+diagram above, `fast.Q_pred` and `slow.Q_pred` are components of
+`stormflow_cfs`, and their own parts, if any, follow.
+
+To make a new component traceable, register its fields with
+`register_trace_field(FieldRecord(name, role=..., component_of=...))` in
+`initialize()` and return their arrays from `_trace_arrays(outputs)`, which
+runs only when a trace is requested. `tests/test_trace.py` checks every
+registered model: the outputs in the trace equal `predict_arrays()`, every
+trace field has the right length, and components add up.
+
 ## Writing a new component
 
 A new formulation only has to be a well-behaved component; composition comes

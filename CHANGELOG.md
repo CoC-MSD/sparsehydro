@@ -6,6 +6,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ## [Unreleased]
 
+### Added
+
+- Model traces, a secondary output for plotting and checking:
+  `IModel.predict_trace()` returns the outputs plus every registered trace
+  field (`register_trace_field`, `trace_fields`, `trace_field_metadata`).
+  `FieldRecord` gains `role` (`output`, `component`, `state`, `flux`) and
+  `component_of`. `predict_arrays()` and calibration are unchanged.
+  `RDIIModel` reports each unit hydrograph's flow (`rdii_component_i`) and its
+  abstraction model's trace (`ia.*`); `MixtureUH` and `PeakTailUH` report their
+  parts; `EnsembleModel` (sum mode) its weighted contributions;
+  `CompositeModel` every child output and trace as `child.field`, with the
+  terms of a summed output as its components. Components always add up to
+  the series they belong to. See "Components and internal states" in
+  `docs/composition.md`.
+
 ## [1.0.0b1] - 2026-11-15
 
 First beta of 1.0.0: the public API (models and the registry, composition and
