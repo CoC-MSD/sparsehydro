@@ -253,6 +253,18 @@ class EnsembleModel(IModel):
                 self.register_trace_field(FieldRecord(
                     name=f"{alias}_contribution", role="component", component_of=self._output_name,
                     description=f"Weighted contribution of component '{alias}' to {self._output_name}"))
+        # Each child's outputs and trace, as "alias.field" (as CompositeModel does).
+        for child, alias in zip(self._children, self._aliases):
+            for f in child.output_fields:
+                if f.name != "datetime":
+                    role = f.role if f.role != "output" else "flux"
+                    self.register_trace_field(FieldRecord(
+                        f"{alias}.{f.name}", units=f.units, description=f.description, role=role,
+                        component_of=f"{alias}.{f.component_of}" if f.component_of else ""))
+            for f in child.trace_fields:
+                self.register_trace_field(FieldRecord(
+                    f"{alias}.{f.name}", units=f.units, description=f.description, role=f.role,
+                    component_of=f"{alias}.{f.component_of}" if f.component_of else ""))
 
         if self._normalize_weights:
             w_labels = " + ".join(f"w_{i}" for i in range(1, n + 1))
@@ -303,11 +315,13 @@ class EnsembleModel(IModel):
         n = len(self._children)
         child_outputs: list[np.ndarray] = []
         datetimes: np.ndarray | None = None
+        last: list[Any] = []  # each child's full result, by reference, for predict_trace
 
         for i, child in enumerate(self._children):
             key = self._extractor_keys[i]
             if key is None:
                 pred_df = child.predict()
+                last.append(pred_df)
                 child_outputs.append(
                     np.asarray(self._extractors[i](pred_df), dtype=float)
                 )
@@ -315,6 +329,7 @@ class EnsembleModel(IModel):
                     datetimes = pred_df["datetime"].to_numpy()
             else:
                 arrays = child.predict_arrays()
+                last.append(arrays)
                 if key not in arrays:
                     raise RuntimeError(
                         f"Component {i + 1} ({self._aliases[i]!r}) has extractor "
@@ -343,17 +358,28 @@ class EnsembleModel(IModel):
         for alias, y in zip(self._aliases, child_outputs):
             out[f"{alias}_output"] = y
         out[self._output_name] = combined
+        self._last_child_results = last
 
         self._state = ModelState.PREDICTED
         return out
 
     def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        """Weighted contribution of each component (sum mode); they add up to the combined output."""
-        if self._mode != "sum":
-            return {}
-        return {f"{alias}_contribution": self.get_scalar_parameter(f"w_{i}").value
-                * np.asarray(outputs[f"{alias}_output"], dtype=float)
-                for i, alias in enumerate(self._aliases, 1)}
+        """Weighted contributions (sum mode) and each child's outputs and trace as ``alias.field``."""
+        trace: dict[str, np.ndarray] = {}
+        if self._mode == "sum":
+            trace.update({f"{alias}_contribution": self.get_scalar_parameter(f"w_{i}").value
+                          * np.asarray(outputs[f"{alias}_output"], dtype=float)
+                          for i, alias in enumerate(self._aliases, 1)})
+        results = getattr(self, "_last_child_results", None)
+        if results is None:
+            raise RuntimeError("Call predict_arrays() before tracing.")
+        for child, alias, result in zip(self._children, self._aliases, results):
+            arrays = ({str(c): result[c].to_numpy() for c in result.columns}
+                      if isinstance(result, pd.DataFrame) else dict(result))
+            trace.update({f"{alias}.{k}": v for k, v in arrays.items() if k != "datetime"})
+            if child.trace_field_names:
+                trace.update({f"{alias}.{k}": v for k, v in child._trace_arrays(arrays).items()})
+        return {k: v for k, v in trace.items() if k in self.__dict__.get("_trace_fields", {})}
 
     def predict(self) -> pd.DataFrame:
         """Sync parameters, run each child, and return the combined output.

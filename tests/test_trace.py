@@ -141,7 +141,23 @@ def test_ensemble_sum_contributions() -> None:
     assert assert_components_sum(model, trace) == ["total"]
     product = EnsembleModel([(NashUH(), "Q_pred"), (GammaUH(), "Q_pred")], mode="product")
     product.initialize()
-    assert not product.trace_field_names  # factors are not additive components
+    assert not [f for f in product.trace_fields if f.role == "component"]  # factors are not additive parts
+
+
+def test_ensemble_forwards_children_traces() -> None:
+    rdii = RDIIModel(uh_components=[RTKTriangle(R=0.03), GammaUH()])
+    model = EnsembleModel([(NashUH(A=0.5), operator.itemgetter("Q_pred")),
+                           (rdii, operator.itemgetter("rdii_cfs"))],
+                          aliases=["base", "wet"], output_name="total", normalize_weights=False)
+    _, trace = run(model)
+    roles = {f.name: (f.role, f.component_of) for f in model.trace_fields}
+    assert roles["wet.rdii_component_2"] == ("component", "wet.rdii_cfs")
+    assert roles["wet.ia.ia_available"][0] == "state"
+    assert assert_components_sum(model, trace) == ["total", "wet.rdii_cfs"]
+    # a callable extractor (DataFrame path) is traced too
+    df_model = EnsembleModel([(NashUH(), lambda df: df["Q_pred"]), (GammaUH(), "Q_pred")], aliases=["a", "b"])
+    _, df_trace = run(df_model)
+    assert "a.Q_pred" in df_trace and "a_contribution" in df_trace
 
 
 def test_composite_exposes_children_and_nested_traces() -> None:

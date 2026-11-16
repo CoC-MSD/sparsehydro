@@ -15,7 +15,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
   `component_of`. `predict_arrays()` and calibration are unchanged.
   `RDIIModel` reports each unit hydrograph's flow (`rdii_component_i`) and its
   abstraction model's trace (`ia.*`); `MixtureUH` and `PeakTailUH` report their
-  parts; `EnsembleModel` (sum mode) its weighted contributions;
+  parts; `EnsembleModel` its weighted contributions (sum mode) and each
+  child's outputs and trace as `alias.field`;
   `CompositeModel` every child output and trace as `child.field`, with the
   terms of a summed output as its components. Components always add up to
   the series they belong to. See "Components and internal states" in
