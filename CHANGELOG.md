@@ -8,6 +8,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ### Added
 
+- `calibration.PooledEventFitter`: one parameter set fitted to all global
+  events together (the model runs over the whole record; a weighted RMSE over
+  the events' peak and tail zones is minimised), scored per event
+  (`PooledFitResult.event_scores`) — the comparison for the per-event fits.
+- `GlobalSequentialFitter.fit` takes `progress(done, total, text)`,
+  `should_stop()` (raises `InterruptedError`) and `warm_start` (start each
+  event from the previous fit, the default, or from the model's values).
+
 - `sparsehydro.metrics`: `max_window_sum` (largest moving-window sum, earliest
   window on ties), `sum_above` (amount above a threshold), `paired_summary`
   (CCC, r², slopes and mean ratio of paired values, e.g. event volumes) and

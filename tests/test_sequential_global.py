@@ -79,3 +79,58 @@ def test_calibrated_areas_are_on_the_per_step_scale(muum019_window, muum019_hier
     assert summary.dt_hours == pytest.approx(5.0 / 60.0)
     a = [dict(zip(c.param_names, c.pareto_X[0]))["A"] for c in summary.calibration_results]
     np.testing.assert_allclose(summary.calibrated_areas(), np.array(a) / summary.dt_hours)
+
+
+def test_global_fitter_reports_progress_and_stops(muum019_window, muum019_hierarchy):
+    globals_, subs, _ = muum019_hierarchy
+    seen = []
+    fitter = GlobalSequentialFitter(lambda: GammaUH(), muum019_window, globals_[:2], subs)
+    fitter.fit(verbose=False, progress=lambda i, n, text: seen.append((i, n)))
+    assert seen[0] == (0, 2) and seen[-1] == (2, 2) and len(seen) == 3
+    calls = []
+
+    def stop_after_first():
+        calls.append(1)
+        return len(calls) > 1
+
+    with pytest.raises(InterruptedError):
+        fitter.fit(verbose=False, should_stop=stop_after_first)
+
+
+def test_independent_fits_start_from_the_defaults(muum019_window, muum019_hierarchy):
+    globals_, subs, _ = muum019_hierarchy
+    fitter = GlobalSequentialFitter(lambda: GammaUH(), muum019_window, globals_[:2], subs)
+    warm = fitter.fit(verbose=False).parameter_evolution()
+    cold = fitter.fit(verbose=False, warm_start=False).parameter_evolution()
+    assert len(warm) == len(cold) == 2
+    # the first event starts from the defaults either way
+    np.testing.assert_allclose(warm.iloc[0][["A", "alpha", "theta"]].astype(float),
+                               cold.iloc[0][["A", "alpha", "theta"]].astype(float))
+
+
+def test_pooled_fit_is_one_parameter_set_scored_per_event(muum019_window, muum019_hierarchy):
+    from sparsehydro.calibration import PooledEventFitter, PooledFitResult
+
+    globals_, subs, _ = muum019_hierarchy
+    fitter = PooledEventFitter(lambda: GammaUH(), muum019_window, globals_[:2], subs)
+    w = fitter.weights(peak_weight=3.0, tail_weight=1.0)
+    assert w.shape == (len(muum019_window),) and set(np.unique(w)) <= {0.0, 1.0, 3.0} and (w > 0).any()
+    res = fitter.fit()
+    assert isinstance(res, PooledFitResult)
+    assert set(res.parameters) == {"A", "alpha", "theta"}
+    assert len(res.predicted) == len(muum019_window) and np.all(np.isfinite(res.predicted["Q_pred"]))
+    assert list(res.event_scores["event_id"]) == [g.global_id for g in sorted(
+        globals_[:2], key=lambda g: g.window_start_datetime)]
+    assert res.event_scores[["nse", "rmse"]].notna().all().all()
+
+
+def test_pooled_fit_on_one_event_matches_the_per_event_fit(muum019_window, muum019_hierarchy):
+    from sparsehydro.calibration import PooledEventFitter
+
+    globals_, subs, _ = muum019_hierarchy
+    one = globals_[:1]
+    per_event = GlobalSequentialFitter(lambda: GammaUH(), muum019_window, one, subs).fit(verbose=False)
+    pooled = PooledEventFitter(lambda: GammaUH(), muum019_window, one, subs).fit()
+    a_event = dict(zip(per_event.calibration_results[0].param_names, per_event.calibration_results[0].pareto_X[0]))
+    # same zones and objective; the pooled run sees the whole record, so allow a little difference
+    assert pooled.parameters["theta"] == pytest.approx(a_event["theta"], rel=0.25)

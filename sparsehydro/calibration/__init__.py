@@ -109,7 +109,13 @@ from ..metrics.objectives import (
     DisjointWindowCCC,
 )
 from .problem import CalibrationProblem
-from .sequential import GlobalSequentialFitter, SequentialFitSummary, SequentialFitter
+from .sequential import (
+    GlobalSequentialFitter,
+    PooledEventFitter,
+    PooledFitResult,
+    SequentialFitSummary,
+    SequentialFitter,
+)
 from .result import CalibrationResult, GenerationRecord, identify_pareto
 from .diagnostics import parameter_table, parameters_near_bounds, pareto_parameters_near_bounds, warn_if_near_bounds
 from .selection import feasible_history, select_peak_filtered_pareto
@@ -173,4 +179,6 @@ __all__ = [
     "SequentialFitter",
     "SequentialFitSummary",
     "GlobalSequentialFitter",
+    "PooledEventFitter",
+    "PooledFitResult",
 ]
