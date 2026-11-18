@@ -1,5 +1,7 @@
 # Plan: CombinedHydroModel — Configurable IA + Any-UH Composite
 
+> **Historical design note.** Implemented as `sparsehydro.models.composite.AbstractionUHModel` on top of `CompositeModel`. Module paths below may be out of date; see the API reference for the current layout.
+
 ## Context
 
 `RDIIModel` hard-codes the unit-hydrograph type (RTK triangles) and knows the
@@ -180,7 +182,8 @@ Add `CombinedHydroModel` to imports and `__all__`.
 ## Verification
 
 ```python
-from sparsehydro.rdii import CombinedHydroModel, IAModel, RTKTriangle
+from sparsehydro.models.rdii import IAModel, RTKTriangle
+from sparsehydro.models import AbstractionUHModel as CombinedHydroModel
 
 # Default usage (matches RDIIModel(n_triangles=3))
 model = CombinedHydroModel()

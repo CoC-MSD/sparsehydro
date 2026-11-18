@@ -44,7 +44,7 @@ Weight bounds: ``[0.0, 2.0]``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -52,6 +52,7 @@ import pandas as pd
 from ..enums import ModelState
 from .base import IModel
 from ..parameters import ConstraintRecord, FieldRecord, ScalarParameter, VectorParameter
+from .._columns import ColumnExtractor
 from ..registry import registry
 
 
@@ -65,10 +66,15 @@ class EnsembleModel(IModel):
     calibration framework.  All child inequality constraints are surfaced and
     concatenated so constraint-aware solvers handle them natively.
 
-    :param components: List of ``(model, extractor)`` pairs.  ``extractor`` is a
-        callable ``(predict_df: pandas.DataFrame) → numpy.ndarray`` that selects
-        the scalar output array from each child's ``predict()`` result.
-    :type components: list[tuple[IModel, Callable]]
+    :param components: List of ``(model, extractor)`` pairs.  ``extractor`` is
+        either the **name of the column** to select from the child's output, or
+        a callable ``(predict_df: pandas.DataFrame) → numpy.ndarray`` that
+        selects the scalar output array from the child's ``predict()`` result.
+        Prefer the column name: it lets :meth:`predict_arrays` read the child
+        through its own ``predict_arrays()`` fast path, so the calibration hot
+        loop never builds a DataFrame it immediately unwraps.  A callable
+        forces the child's ``predict()`` DataFrame to be materialised.
+    :type components: list[tuple[IModel, Callable | str]]
     :param mode: Combination mode.  ``"sum"`` computes ``Σ w_i · y_i``; ``"product"``
         computes ``Π y_i^w_i``.  Defaults to ``"sum"``.
     :type mode: str
@@ -87,7 +93,7 @@ class EnsembleModel(IModel):
 
     def __init__(
         self,
-        components: list[tuple[IModel, Callable]],
+        components: list[tuple[IModel, Callable | str]],
         mode: str = "sum",
         aliases: list[str] | None = None,
         output_name: str = "ensemble_output",
@@ -110,7 +116,23 @@ class EnsembleModel(IModel):
             self._aliases = [f"model_{i + 1}" for i in range(n)]
 
         self._children: list[IModel] = [m for m, _ in components]
-        self._extractors: list[Callable] = [e for _, e in components]
+        # A column name lets predict_arrays() read the child without building a
+        # DataFrame; a callable needs predict().  Keep both forms: the key when
+        # the fast path is available, and a callable for the DataFrame path.
+        self._extractor_keys: list[str | None] = []
+        self._extractors: list[Callable] = []
+        for _, extractor in components:
+            if isinstance(extractor, str):
+                self._extractor_keys.append(extractor)
+                self._extractors.append(ColumnExtractor(extractor))
+            elif callable(extractor):
+                self._extractor_keys.append(None)
+                self._extractors.append(extractor)
+            else:
+                raise TypeError(
+                    "Each component extractor must be a column name (str) or a "
+                    f"callable; got {type(extractor).__name__}."
+                )
         self._mode: str = mode
         self._output_name: str = output_name
         self._normalize_weights: bool = normalize_weights and (mode == "sum")
@@ -124,6 +146,7 @@ class EnsembleModel(IModel):
 
     def initialize(self) -> None:
         """Register weight + child parameters, surface child constraints."""
+        self._reset_registries()
         n = len(self._children)
 
         for child in self._children:
@@ -225,6 +248,24 @@ class EnsembleModel(IModel):
             calibratable=True,
         ))
 
+        if self._mode == "sum":  # weighted terms add up to the combined output
+            for alias in self._aliases:
+                self.register_trace_field(FieldRecord(
+                    name=f"{alias}_contribution", role="component", component_of=self._output_name,
+                    description=f"Weighted contribution of component '{alias}' to {self._output_name}"))
+        # Each child's outputs and trace, as "alias.field" (as CompositeModel does).
+        for child, alias in zip(self._children, self._aliases):
+            for f in child.output_fields:
+                if f.name != "datetime":
+                    role = f.role if f.role != "output" else "flux"
+                    self.register_trace_field(FieldRecord(
+                        f"{alias}.{f.name}", units=f.units, description=f.description, role=role,
+                        component_of=f"{alias}.{f.component_of}" if f.component_of else ""))
+            for f in child.trace_fields:
+                self.register_trace_field(FieldRecord(
+                    f"{alias}.{f.name}", units=f.units, description=f.description, role=f.role,
+                    component_of=f"{alias}.{f.component_of}" if f.component_of else ""))
+
         if self._normalize_weights:
             w_labels = " + ".join(f"w_{i}" for i in range(1, n + 1))
             self.register_inequality_constraint(ConstraintRecord(
@@ -257,25 +298,47 @@ class EnsembleModel(IModel):
             child.prepare(data, **kwargs)
         self._state = ModelState.PREPARED
 
-    def predict(self) -> pd.DataFrame:
-        """Sync parameters, run each child, and return the combined output.
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """Sync parameters, run each child, and combine, returning plain arrays.
 
-        :returns: DataFrame with a ``datetime`` column (when available), one
-            ``{alias}_output`` column per component, and the combined
-            ``{output_name}`` column.
-        :rtype: pandas.DataFrame
+        Children whose extractor is a column name are read through their own
+        ``predict_arrays()``; children with a callable extractor still have
+        their ``predict()`` DataFrame materialised.
+
+        :returns: Mapping with a ``datetime`` entry (when available), one
+            ``{alias}_output`` entry per component, and the combined
+            ``{output_name}`` entry.
+        :rtype: dict[str, numpy.ndarray]
         """
         self._sync_to_children()
 
         n = len(self._children)
         child_outputs: list[np.ndarray] = []
-        first_pred: pd.DataFrame | None = None
+        datetimes: np.ndarray | None = None
+        last: list[Any] = []  # each child's full result, by reference, for predict_trace
 
-        for i, (child, extractor) in enumerate(zip(self._children, self._extractors)):
-            pred_df = child.predict()
-            if i == 0:
-                first_pred = pred_df
-            child_outputs.append(np.asarray(extractor(pred_df), dtype=float))
+        for i, child in enumerate(self._children):
+            key = self._extractor_keys[i]
+            if key is None:
+                pred_df = child.predict()
+                last.append(pred_df)
+                child_outputs.append(
+                    np.asarray(self._extractors[i](pred_df), dtype=float)
+                )
+                if i == 0 and "datetime" in pred_df.columns:
+                    datetimes = pred_df["datetime"].to_numpy()
+            else:
+                arrays = child.predict_arrays()
+                last.append(arrays)
+                if key not in arrays:
+                    raise RuntimeError(
+                        f"Component {i + 1} ({self._aliases[i]!r}) has extractor "
+                        f"{key!r}, but its predict_arrays() returned keys: "
+                        f"{list(arrays)}"
+                    )
+                child_outputs.append(np.asarray(arrays[key], dtype=float))
+                if i == 0 and "datetime" in arrays:
+                    datetimes = np.asarray(arrays["datetime"])
 
         weights = [self.get_scalar_parameter(f"w_{i}").value for i in range(1, n + 1)]
 
@@ -290,14 +353,43 @@ class EnsembleModel(IModel):
                     combined = combined * np.where(y > 0.0, y ** w, 0.0)
 
         out: dict[str, Any] = {}
-        if first_pred is not None and "datetime" in first_pred.columns:
-            out["datetime"] = first_pred["datetime"].to_numpy()
+        if datetimes is not None:
+            out["datetime"] = datetimes
         for alias, y in zip(self._aliases, child_outputs):
             out[f"{alias}_output"] = y
         out[self._output_name] = combined
+        self._last_child_results = last
 
         self._state = ModelState.PREDICTED
-        return pd.DataFrame(out)
+        return out
+
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Weighted contributions (sum mode) and each child's outputs and trace as ``alias.field``."""
+        trace: dict[str, np.ndarray] = {}
+        if self._mode == "sum":
+            trace.update({f"{alias}_contribution": self.get_scalar_parameter(f"w_{i}").value
+                          * np.asarray(outputs[f"{alias}_output"], dtype=float)
+                          for i, alias in enumerate(self._aliases, 1)})
+        results = getattr(self, "_last_child_results", None)
+        if results is None:
+            raise RuntimeError("Call predict_arrays() before tracing.")
+        for child, alias, result in zip(self._children, self._aliases, results):
+            arrays = ({str(c): result[c].to_numpy() for c in result.columns}
+                      if isinstance(result, pd.DataFrame) else dict(result))
+            trace.update({f"{alias}.{k}": v for k, v in arrays.items() if k != "datetime"})
+            if child.trace_field_names:
+                trace.update({f"{alias}.{k}": v for k, v in child._trace_arrays(arrays).items()})
+        return {k: v for k, v in trace.items() if k in self.__dict__.get("_trace_fields", {})}
+
+    def predict(self) -> pd.DataFrame:
+        """Sync parameters, run each child, and return the combined output.
+
+        :returns: DataFrame with a ``datetime`` column (when available), one
+            ``{alias}_output`` column per component, and the combined
+            ``{output_name}`` column.
+        :rtype: pandas.DataFrame
+        """
+        return pd.DataFrame(self.predict_arrays())
 
     def finalize(self) -> None:
         """Finalize all child models and advance to FINALIZED."""

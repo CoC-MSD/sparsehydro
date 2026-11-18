@@ -32,7 +32,7 @@ GenerationRecord = namedtuple(
 """
 
 
-def _identify_pareto(F: np.ndarray) -> np.ndarray:
+def identify_pareto(F: np.ndarray) -> np.ndarray:
     """Boolean mask of non-dominated solutions (all objectives minimised).
 
     O(n²) dominance check — used when pymoo is unavailable or as a fallback.
@@ -191,7 +191,7 @@ class CalibrationResult:
         rows = []
         final_gen = self.history[-1].generation if self.history else -1
         for rec in self.history:
-            is_pareto_mask = _identify_pareto(rec.F)
+            is_pareto_mask = identify_pareto(rec.F)
             for j in range(len(rec.X)):
                 row: dict = {"generation": rec.generation}
                 for k, name in enumerate(self.param_names):

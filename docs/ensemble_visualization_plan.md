@@ -1,5 +1,7 @@
 # Ensemble Visualization & Parameter Configuration Plan
 
+> **Historical design note.** Implemented in `sparsehydro.models.ensemble` and `sparsehydro.visualization`. Module paths below may be out of date; see the API reference for the current layout.
+
 ## Goal
 
 Extend `EnsembleModel` and the visualization layer so that after instantiating a

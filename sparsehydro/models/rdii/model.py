@@ -50,8 +50,7 @@ _DEFAULT_RTK = [
 #: :mod:`sparsehydro.models.convolution`, which switches on the cost ``n * m``
 #: rather than ``max(n, m)``.  Retained so existing imports keep resolving.
 _FFT_THRESHOLD = 500
-_MM_AC_PER_HR_TO_CFS = 43560.0 / (304.8 * 3600.0)
-_IN_AC_PER_HR_TO_CFS = 43560.0 / (12.0 * 3600.0)
+from ...units import IN_AC_PER_HR_TO_CFS as _IN_AC_PER_HR_TO_CFS, MM_AC_PER_HR_TO_CFS as _MM_AC_PER_HR_TO_CFS
 
 
 @registry.register
@@ -72,6 +71,10 @@ class RDIIModel(IModel):
     :type uh_components: list[IUnitHydroComponent], optional
     :param units: Unit system — ``"imperial"`` (inches, default) or ``"metric"`` (mm).
     :type units: str
+    :param component_outputs: When ``True``, :meth:`predict_arrays` also returns
+        ``rdii_component_{i}`` [cfs] for each UH component (before the final
+        non-negativity clip of the total).
+    :type component_outputs: bool
 
     Usage::
 
@@ -99,6 +102,8 @@ class RDIIModel(IModel):
         ia_model: IModel | None = None,
         uh_components: list[IUnitHydroComponent] | None = None,
         units: str = "imperial",
+        *,
+        component_outputs: bool = False,
     ) -> None:
         super().__init__()
         if units not in ("imperial", "metric"):
@@ -117,11 +122,53 @@ class RDIIModel(IModel):
         else:
             self._uh_components = list(uh_components)
 
+        self.component_outputs = bool(component_outputs)
         self._prepared_df: pd.DataFrame | None = None
         self._dt_hours: float = 1.0
 
         self._ia_param_name_map: dict[str, str] = {}
         self._uh_param_maps: list[dict[str, str]] = []
+
+    @classmethod
+    def from_config(cls, spec: dict[str, Any], build) -> "RDIIModel":
+        """Build from configuration.
+
+        Keys: ``ia_model`` (a model spec), ``routing`` or ``uh_components``
+        (a list of unit hydrograph specs), ``units``, ``component_outputs``,
+        and ``excess``: the address of an upstream excess series inside a
+        composite. ``excess`` replaces the IA model with
+        :class:`~sparsehydro.models.abstraction.ExternalExcess`; the composite
+        creates the binding through :meth:`config_inputs`.
+        """
+        from ..abstraction.external import ExternalExcess
+
+        spec = dict(spec)
+        units = spec.pop("units", "imperial")
+        routing = spec.pop("routing", None)
+        if routing is None:
+            routing = spec.pop("uh_components", None)
+        excess = spec.pop("excess", None)
+        ia_spec = spec.pop("ia_model", None)
+        if excess is not None and ia_spec is not None:
+            raise ValueError("Give either 'excess' or 'ia_model', not both")
+        if excess is not None:
+            ia_model = ExternalExcess(units=units)
+        else:
+            ia_model = build(ia_spec) if ia_spec is not None else None
+        uh = build(routing) if routing is not None else None
+        component_outputs = bool(spec.pop("component_outputs", False))
+        if spec:
+            raise ValueError(f"Unknown rdii configuration keys: {sorted(spec)}")
+        return cls(ia_model=ia_model, uh_components=uh, units=units,
+                   component_outputs=component_outputs)
+
+    @classmethod
+    def config_inputs(cls, spec: dict[str, Any]) -> dict[str, str]:
+        """Bindings implied by a configuration spec (``excess`` -> excess column)."""
+        if spec.get("excess") is None:
+            return {}
+        column = "p_excess_in" if spec.get("units", "imperial") == "imperial" else "p_excess_mm"
+        return {column: spec["excess"]}
 
     # ------------------------------------------------------------------
     # Properties
@@ -146,6 +193,18 @@ class RDIIModel(IModel):
         """The unit hydrograph components, in registration order."""
         return list(self._uh_components)
 
+    @property
+    def input_field_names(self) -> list[str]:
+        """Inputs of the IA model (e.g. ``p_excess_in`` for :class:`ExternalExcess`)."""
+        return list(self._ia_model.input_field_names)
+
+    def set_input(self, name: str, values: np.ndarray) -> None:
+        """Forward a bound input to the IA model."""
+        self._ia_model.set_input(name, values)
+
+    def _has_freeze_constraint(self) -> bool:
+        return {"ia_T_freeze", "ia_T_ref"} <= set(self._ia_param_name_map)
+
     # ------------------------------------------------------------------
     # IModel lifecycle
     # ------------------------------------------------------------------
@@ -160,6 +219,7 @@ class RDIIModel(IModel):
         :returns: Nothing.
         :rtype: None
         """
+        self._reset_registries()
         self._ia_model.initialize()
         for uh in self._uh_components:
             uh.initialize()
@@ -175,8 +235,11 @@ class RDIIModel(IModel):
                 units="-", description=f"Component {i}: fraction of P_excess routed through this UH",
             ))
 
+        # IA parameters keep their names; names RDII already owns (area_acres)
+        # stay RDII's.
         self._ia_param_name_map = {
             name: name for name in self._ia_model.scalar_parameter_names
+            if name not in self._scalar_parameters
         }
         for name in self._ia_param_name_map:
             p = self._ia_model.get_scalar_parameter(name)
@@ -208,13 +271,20 @@ class RDIIModel(IModel):
                 "(total runoff fraction must not exceed 100 %)"
             ),
         ))
-        self.register_inequality_constraint(ConstraintRecord(
-            name="T_freeze_lt_T_ref",
-            description=(
-                "ia_T_freeze < ia_T_ref  "
-                "(freeze threshold must be below the reference temperature)"
-            ),
-        ))
+        if self._has_freeze_constraint():
+            self.register_inequality_constraint(ConstraintRecord(
+                name="T_freeze_lt_T_ref",
+                description=(
+                    "ia_T_freeze < ia_T_ref  "
+                    "(freeze threshold must be below the reference temperature)"
+                ),
+            ))
+        # Constraints of the UH components (e.g. a triangle's Tp < Tb).
+        for i, uh in enumerate(self._uh_components, 1):
+            for record in uh._constraint_registry:
+                self.register_inequality_constraint(ConstraintRecord(
+                    name=f"uh{i}_{record.name}", description=record.description,
+                ))
 
         depth_units = "in" if self._units == "imperial" else "mm"
         self.register_output_field(FieldRecord(
@@ -239,6 +309,18 @@ class RDIIModel(IModel):
             description="Rainfall excess depth after initial abstraction",
             calibratable=False,
         ))
+        # Trace: each unit hydrograph's flow (they sum to rdii_cfs) and the
+        # abstraction model's own trace under "ia.".
+        for i, uh in enumerate(self._uh_components, 1):
+            self.register_trace_field(FieldRecord(
+                name=f"rdii_component_{i}", units="CFS", role="component", component_of="rdii_cfs",
+                description=f"RDII flow routed through unit hydrograph {i} ({type(uh).__name__})",
+            ))
+        for field in self._ia_model.trace_fields:
+            self.register_trace_field(FieldRecord(
+                name=f"ia.{field.name}", units=field.units, description=field.description, role=field.role,
+                component_of=f"ia.{field.component_of}" if field.component_of else "",
+            ))
 
         self._state = ModelState.INITIALIZED
 
@@ -260,6 +342,17 @@ class RDIIModel(IModel):
             T_freeze = self.get_scalar_parameter("ia_T_freeze").value
             T_ref = self.get_scalar_parameter("ia_T_ref").value
             if T_freeze >= T_ref:
+                return False
+
+        # RDIIModel owns the forwarded UH parameters and their bounds, so only the
+        # components' own constraints and structural checks apply here.
+        self._sync_to_submodels()
+        for uh in self._uh_components:
+            residuals = getattr(uh, "_constraint_residuals", None)
+            if residuals is None:
+                if not uh.validate():
+                    return False
+            elif any(g > 0.0 for g in residuals()) or not uh._extra_valid():
                 return False
 
         self._state = ModelState.VALIDATED
@@ -313,15 +406,15 @@ class RDIIModel(IModel):
 
         self._state = ModelState.PREPARED
 
-    def predict(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
+    def predict_arrays(self) -> dict[str, np.ndarray]:
         """Compute RDII by convolving P_excess with each UH component.
 
         Syncs parameter values to sub-models on every call so parameter changes
         made between optimizer iterations are picked up automatically.
 
-        :returns: DataFrame with columns ``datetime``, ``rdii_cfs``,
-            ``rdii_mm`` (or ``rdii_in``), ``p_excess_mm`` (or ``p_excess_in``).
-        :rtype: pandas.DataFrame
+        :returns: Mapping with ``datetime``, ``rdii_cfs``, ``rdii_mm`` (or
+            ``rdii_in``), ``p_excess_mm`` (or ``p_excess_in``).
+        :rtype: dict[str, numpy.ndarray]
         :raises RuntimeError: If ``prepare()`` has not been called.
         """
         if self._prepared_df is None:
@@ -329,34 +422,68 @@ class RDIIModel(IModel):
 
         self._sync_to_submodels()
 
-        ia_result = self._ia_model.predict()
-        if self._excess_col not in ia_result.columns:
+        ia_result = self._ia_model.predict_arrays()
+        if self._excess_col not in ia_result:
             raise RuntimeError(
-                f"ia_model.predict() must return a DataFrame with a "
-                f"'{self._excess_col}' column; got columns: {list(ia_result.columns)}"
+                f"ia_model.predict_arrays() must provide a "
+                f"'{self._excess_col}' entry; got keys: {list(ia_result)}"
             )
-        p_excess = ia_result[self._excess_col].to_numpy(dtype=float)
+        p_excess = np.asarray(ia_result[self._excess_col], dtype=float)
         n = len(p_excess)
         rdii = np.zeros(n, dtype=float)
+        area_acres = self.get_scalar_parameter("area_acres").value
+        components: dict[str, np.ndarray] = {}
 
         for i, uh in enumerate(self._uh_components, 1):
             R_i = self.get_scalar_parameter(f"R_{i}").value
             kernel = uh.get_kernel(self._dt_hours)
-            rdii += R_i * convolve_causal(p_excess, kernel, n_out=n)
+            part = R_i * convolve_causal(p_excess, kernel, n_out=n)
+            rdii += part
+            if self.component_outputs:
+                components[f"rdii_component_{i}"] = part * area_acres * self._depth_to_cfs
 
         rdii = np.clip(rdii, 0.0, None)
-        area_acres = self.get_scalar_parameter("area_acres").value
         rdii_cfs = rdii * area_acres * self._depth_to_cfs
         rdii_depth = rdii * self._dt_hours
 
-        result = pd.DataFrame({
+        self._state = ModelState.PREDICTED
+        out = {
             "datetime": self._prepared_df["datetime"].values,
             "rdii_cfs": rdii_cfs,
             self._depth_col: rdii_depth,
             self._excess_col: p_excess.copy(),
-        })
-        self._state = ModelState.PREDICTED
-        return result
+        }
+        out.update(components)
+        return out
+
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Flow of each unit hydrograph (summing to ``rdii_cfs``) and the abstraction model's trace."""
+        p_excess = np.asarray(outputs[self._excess_col], dtype=float)
+        n = len(p_excess)
+        scale = self.get_scalar_parameter("area_acres").value * self._depth_to_cfs
+        trace: dict[str, np.ndarray] = {}
+        for i, uh in enumerate(self._uh_components, 1):
+            name = f"rdii_component_{i}"
+            if name in outputs:  # already returned with component_outputs=True
+                trace[name] = outputs[name]
+                continue
+            R_i = self.get_scalar_parameter(f"R_{i}").value
+            trace[name] = R_i * convolve_causal(p_excess, uh.get_kernel(self._dt_hours), n_out=n) * scale
+        ia_fields = self._ia_model.trace_field_names
+        if ia_fields:
+            ia_trace = self._ia_model._trace_arrays({"datetime": outputs["datetime"], self._excess_col: p_excess})
+            trace.update({f"ia.{k}": v for k, v in ia_trace.items()})
+        return trace
+
+    def predict(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        """Compute RDII by convolving P_excess with each UH component.
+
+        :returns: DataFrame with columns ``datetime``, ``rdii_cfs``,
+            ``rdii_mm`` (or ``rdii_in``), ``p_excess_mm`` (or ``p_excess_in``).
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If ``prepare()`` has not been called.
+        """
+        return pd.DataFrame(self.predict_arrays())
 
     def predict_components(self) -> pd.DataFrame:
         """Compute the RDII contribution of each UH component separately.
@@ -415,52 +542,56 @@ class RDIIModel(IModel):
     def inequality_constraints(self) -> list[float]:
         """Inequality constraint residuals for the optimizer.
 
-        Returns ``[Σ R_i - 1.0, ia_T_freeze - ia_T_ref]``.
-        A value ≤ 0 means feasible.
+        Returns ``[Σ R_i - 1.0, ia_T_freeze - ia_T_ref]`` followed by the UH
+        components' own residuals. A value ≤ 0 means feasible.
 
-        :returns: Two-element list ``[Σ R_i - 1, ia_T_freeze - ia_T_ref]``.
+        :returns: Residuals in registration order.
         :rtype: list[float]
         """
         R_sum = sum(
             self.get_scalar_parameter(f"R_{i}").value
             for i in range(1, self.n_components + 1)
         )
-        T_freeze = self.get_scalar_parameter("ia_T_freeze").value
-        T_ref = self.get_scalar_parameter("ia_T_ref").value
-        return [R_sum - 1.0, T_freeze - T_ref]
+        out = [R_sum - 1.0]
+        if self._has_freeze_constraint():
+            out.append(self.get_scalar_parameter("ia_T_freeze").value
+                       - self.get_scalar_parameter("ia_T_ref").value)
+        if any(uh._constraint_registry for uh in self._uh_components):
+            self._sync_to_submodels()
+            for uh in self._uh_components:
+                if uh._constraint_registry:
+                    out.extend(uh.inequality_constraints())
+        return out
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
     def _sync_to_submodels(self) -> None:
-        """Push composite registry values to sub-model registries.
+        """Push composite registry values, bounds and calibrate flags to sub-models.
 
         :returns: Nothing.
         :rtype: None
         """
-        for ia_name, composite_name in self._ia_param_name_map.items():
-            if composite_name in self._scalar_parameters:
+        pairs = [(self._ia_model, self._ia_param_name_map)]
+        pairs += list(zip(self._uh_components, self._uh_param_maps))
+        for submodel, mapping in pairs:
+            for sub_name, composite_name in mapping.items():
+                if composite_name not in self._scalar_parameters:
+                    continue
                 try:
-                    self._ia_model.get_scalar_parameter(ia_name).value = (
-                        self.get_scalar_parameter(composite_name).value
-                    )
+                    target = submodel.get_scalar_parameter(sub_name)
                 except KeyError:
-                    pass
+                    continue
+                source = self._scalar_parameters[composite_name]
+                target.lower_bound = source.lower_bound
+                target.upper_bound = source.upper_bound
+                target.value = source.value
+                target.calibrate = source.calibrate
 
-        for i, (uh, mapping) in enumerate(
-            zip(self._uh_components, self._uh_param_maps), 1
-        ):
-            for orig_name, composite_name in mapping.items():
-                try:
-                    uh.get_scalar_parameter(orig_name).value = (
-                        self.get_scalar_parameter(composite_name).value
-                    )
-                except KeyError:
-                    pass
-
+        for i, uh in enumerate(self._uh_components, 1):
             amp = type(uh)._amplitude_param_name
-            if amp:
+            if amp and getattr(type(uh), "_amplitude_is_fraction", False):
                 try:
                     uh.get_scalar_parameter(amp).value = (
                         self.get_scalar_parameter(f"R_{i}").value
@@ -493,17 +624,23 @@ class RDIIModel(IModel):
 
 
 def _amplitude_default(uh: IUnitHydroComponent) -> float:
-    """Return the default R value from the component's amplitude parameter, else 0.05.
+    """Return the default ``R_i`` for a UH component.
+
+    A component whose amplitude is itself a routed fraction (``RTKTriangle.R``)
+    supplies it; any other component (whose ``A`` is a flow scale, ignored
+    inside ``RDIIModel``) starts at 0.05.
 
     :param uh: Unit hydrograph component to inspect.
     :type uh: IUnitHydroComponent
-    :returns: The component's amplitude parameter value, or ``0.05`` if absent.
+    :returns: Default fraction in ``[0, 1]``.
     :rtype: float
     """
     amp = type(uh)._amplitude_param_name
-    if amp:
+    if amp and getattr(type(uh), "_amplitude_is_fraction", False):
         try:
-            return float(uh.get_scalar_parameter(amp).value)
+            value = float(uh.get_scalar_parameter(amp).value)
         except KeyError:
-            pass
+            return 0.05
+        if 0.0 <= value <= 1.0:
+            return value
     return 0.05

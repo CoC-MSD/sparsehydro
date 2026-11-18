@@ -41,7 +41,7 @@ def test_param_prefixing():
     m.initialize()
     names = m.scalar_parameter_names
     assert any(n.startswith("ia_") for n in names)
-    assert "uh_A" in names and "uh_tt" in names and "uh_tp" in names
+    assert "uh_A" in names and "uh_alpha" in names and "uh_theta" in names
 
 
 def test_registered():

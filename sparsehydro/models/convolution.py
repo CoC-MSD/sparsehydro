@@ -7,17 +7,17 @@ discriminator turns out to be the product ``n * m``.
 Measured on this project's workloads (float64), winner and its margin over the
 loser:
 
-======  =======  =======  =======  =======  =======  =======
- n \\ m       40       81      160      300      500      864
-======  =======  =======  =======  =======  =======  =======
-   600   dir 12   dir 6.4  dir 4.6  dir 2.5  dir 1.9  dir 1.3
-  1000  dir 7.9   dir 7.3  dir 3.4  dir 2.0  dir 1.2   oa 1.2
-  2000  dir 4.3   dir 4.3  dir 3.3  dir 1.3   oa 1.0   oa 1.6
-  5000  dir 2.1   dir 2.3  dir 1.8  dir 1.2   oa 1.5   oa 2.3
- 10000  dir 1.3   dir 1.4   oa 1.1   oa 1.5   oa 1.6   oa 2.1
- 20000   oa 1.1   dir 1.1   oa 1.4   oa 2.1   oa 2.5   oa 3.3
-107000  dir 1.3   dir 1.5   oa 1.1   oa 1.5   oa 2.2   oa 3.4
-======  =======  =======  =======  =======  =======  =======
+========  ========  ========  ========  ========  ========  ========
+   n \\ m        40        81       160       300       500       864
+========  ========  ========  ========  ========  ========  ========
+     600    dir 12   dir 6.4   dir 4.6   dir 2.5   dir 1.9   dir 1.3
+    1000   dir 7.9   dir 7.3   dir 3.4   dir 2.0   dir 1.2    oa 1.2
+    2000   dir 4.3   dir 4.3   dir 3.3   dir 1.3    oa 1.0    oa 1.6
+    5000   dir 2.1   dir 2.3   dir 1.8   dir 1.2    oa 1.5    oa 2.3
+   10000   dir 1.3   dir 1.4    oa 1.1    oa 1.5    oa 1.6    oa 2.1
+   20000    oa 1.1   dir 1.1    oa 1.4    oa 2.1    oa 2.5    oa 3.3
+  107000   dir 1.3   dir 1.5    oa 1.1    oa 1.5    oa 2.2    oa 3.4
+========  ========  ========  ========  ========  ========  ========
 
 ``n * m > 1e6`` reproduces that boundary with a worst case of about 1.45x, and
 only in the small-``m``/large-``n`` corner where the two are close to a tie

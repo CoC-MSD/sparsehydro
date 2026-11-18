@@ -117,7 +117,7 @@ def test_evaluate_fast_and_fallback_agree():
     down the DataFrame extractor path; both must agree bit-for-bit.
     """
     from sparsehydro.calibration import CalibrationProblem
-    from sparsehydro.calibration.objectives import (
+    from sparsehydro.metrics.objectives import (
         WeightedRMSE, RMSE, NashSutcliffe, KGE,
     )
 
@@ -193,35 +193,29 @@ def test_reprepare_with_new_rain_invalidates(cls):
 
 @pytest.mark.parametrize("cls", ALL_UH, ids=[c.__name__ for c in ALL_UH])
 def test_predicted_flow_is_timestep_invariant(cls):
-    """Q does not depend on ``dt`` -- and that is by construction, not by accident.
+    """The same physical rainfall gives the same response at 5 min and 1 h.
 
-    ``get_kernel`` normalises to ``raw / (sum * dt)`` and ``predict`` multiplies
-    by ``dt``, so the two cancel exactly: the discrete ordinates ``kernel * dt``
-    sum to 1 and convolution conserves volume.  Recording this explicitly is
-    what makes :func:`test_reprepare_with_new_timestep_updates_cached_dt` the
-    right way to test dt caching -- Q simply cannot detect a stale ``dt``.
+    Time parameters are in hours and kernels are exact bin averages, so an
+    hourly rain series disaggregated to 5 minutes gives, at each hour boundary,
+    exactly the hourly prediction. (Relabelling the *same per-step depths* as a
+    different timestep is a different storm and correctly changes Q.)
     """
+    rain_h = _rain_df(seed=3)["rain"].to_numpy()[: N // 12]
+    rain_5 = np.repeat(rain_h / 12.0, 12)
+
     m = cls()
     m.initialize()
     m.validate()
-
-    rain = _rain_df(seed=3)["rain"].to_numpy()
-    df_5min = pd.DataFrame(
-        {"datetime": pd.date_range("2022-05-01", periods=N, freq="5min"), "rain": rain}
-    )
-    df_1hr = pd.DataFrame(
-        {"datetime": pd.date_range("2022-05-01", periods=N, freq="1h"), "rain": rain}
-    )
-
-    m.prepare(df_5min)
+    m.prepare(pd.DataFrame({"datetime": pd.date_range("2022-05-01", periods=len(rain_5), freq="5min"),
+                            "rain": rain_5}))
     q_5 = m.predict()["Q_pred"].to_numpy(dtype=float)
-    m.prepare(df_1hr)
+    m.prepare(pd.DataFrame({"datetime": pd.date_range("2022-05-01", periods=len(rain_h), freq="1h"),
+                            "rain": rain_h}))
     q_1 = m.predict()["Q_pred"].to_numpy(dtype=float)
 
     np.testing.assert_allclose(
-        q_5, q_1, rtol=1e-12, atol=0.0,
-        err_msg=f"{cls.__name__}: Q became timestep-dependent; the dt in "
-                f"get_kernel's normalisation no longer cancels the dt in predict()",
+        q_5[11::12], q_1, rtol=1e-9, atol=1e-12,
+        err_msg=f"{cls.__name__}: response depends on the model timestep",
     )
 
 
@@ -229,10 +223,8 @@ def test_predicted_flow_is_timestep_invariant(cls):
 def test_reprepare_with_new_timestep_updates_cached_dt(cls):
     """Re-``prepare()`` at a different timestep updates the cached ``dt_hours``.
 
-    Since Q is dt-invariant (see above), a stale ``dt`` cannot be caught through
-    the prediction -- it has to be asserted on the cache directly.  It still
-    matters: ``dt_hours`` is what ``get_kernel`` scales by, so a stale value
-    silently mis-scales every kernel handed to plotting and diagnostics.
+    ``dt_hours`` sets the bin width of every kernel, so a stale value would
+    silently give the wrong response; this asserts the cache directly.
     """
     m = cls()
     m.initialize()
@@ -291,7 +283,7 @@ def test_evaluate_constructs_no_dataframes(composite):
     reintroduces a per-evaluation frame.
     """
     from sparsehydro.calibration import CalibrationProblem
-    from sparsehydro.calibration.objectives import RMSE, NashSutcliffe
+    from sparsehydro.metrics.objectives import RMSE, NashSutcliffe
 
     df = _rain_df().assign(
         obs=np.random.default_rng(5).gamma(2.0, 1.0, N),

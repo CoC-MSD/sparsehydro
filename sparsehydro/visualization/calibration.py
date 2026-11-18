@@ -69,7 +69,7 @@ try:
         :returns: Plotly Figure with animation frames and slider.
         :rtype: plotly.graph_objects.Figure
         """
-        from ..calibration.result import _identify_pareto
+        from ..calibration.result import identify_pareto
 
         obj_names = result.objective_names
         min_flags = result.minimize_flags
@@ -85,7 +85,7 @@ try:
         for rec in result.history:
             all_x = _display_col(rec.F, xi, min_flags)
             all_y = _display_col(rec.F, yi, min_flags)
-            is_pareto = _identify_pareto(rec.F)
+            is_pareto = identify_pareto(rec.F)
             par_x = all_x[is_pareto]
             par_y = all_y[is_pareto]
 
@@ -129,7 +129,7 @@ try:
             )
 
         first = result.history[0]
-        is_pareto0 = _identify_pareto(first.F)
+        is_pareto0 = identify_pareto(first.F)
         init_x = _display_col(first.F, xi, min_flags)
         init_y = _display_col(first.F, yi, min_flags)
         init_data = [

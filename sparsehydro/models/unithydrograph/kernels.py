@@ -1,19 +1,21 @@
-"""Shared unit-hydrograph kernel helpers.
+"""Shared unit-hydrograph kernel helpers and truncation constants.
 
-Every UH model builds its ordinates the same way: evaluate a closed-form shape
-on a time base expressed in **time steps**, then normalise so the discrete
-ordinates carry unit volume::
+Unit hydrographs in sparsehydro are defined by the cumulative distribution
+``F(t)`` of a unit-area instantaneous response, with ``t`` in **hours**. The
+discrete kernel for a time step ``dt`` is the exact bin average::
 
-    sum(get_kernel(dt)) * dt ~ 1.0        [kernel units: 1/hr]
+    k[j] = (F((j + 1) * dt) - F(j * dt)) / dt        [1/hr]
 
-Because :meth:`predict` multiplies the kernel by ``dt`` again, the two ``dt``
-factors cancel exactly and predicted flow is independent of the timestep --
-the normalisation is what makes convolution volume-conserving, not a unit
-conversion.
+so ``sum(k) * dt == 1`` (to rounding) and the response shape does not depend on
+``dt``. Convolving rainfall depth per step with ``k`` gives the instantaneous
+outflow rate at the end of each step for rain falling uniformly within each
+step.
 
-These helpers previously lived as private names in :mod:`.models`; they are
-re-exported there under their old ``_``-prefixed names so existing imports keep
-working.
+Responses with infinite support are truncated at the ``1 - TAIL_EPS`` quantile
+or ``MAX_DURATION_HOURS``, whichever comes first, and renormalised.
+
+``MAX_STEPS``, ``finalize_kernel`` and ``normalize_kernel`` belong to the
+earlier step-based kernels and are kept only for code that imported them.
 """
 
 from __future__ import annotations
@@ -21,7 +23,16 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-#: Maximum kernel length in time steps (72 h at 5-minute intervals).
+#: Tail mass left out when an infinite-support response is truncated.
+TAIL_EPS: float = 1e-6
+
+#: Longest response retained [hr] (30 days).
+MAX_DURATION_HOURS: float = 720.0
+
+#: Hard cap on the number of kernel ordinates.
+MAX_ORDINATES: int = 500_000
+
+#: Deprecated: length cap of the earlier step-based kernels (72 h at 5 min).
 MAX_STEPS: int = 864
 
 #: Cumulative-mass fraction at which to truncate a kernel's tail, or ``None`` to
@@ -197,6 +208,9 @@ def finalize_kernel(
 
 
 __all__ = [
+    "TAIL_EPS",
+    "MAX_DURATION_HOURS",
+    "MAX_ORDINATES",
     "MAX_STEPS",
     "DEFAULT_MASS_FRACTION",
     "finalize_kernel",

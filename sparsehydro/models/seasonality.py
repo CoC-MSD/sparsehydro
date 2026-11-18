@@ -118,6 +118,7 @@ class SeasonalityModel(IModel):
 
     def initialize(self) -> None:
         """Register baseline, dimension weights, and peaking factor parameters."""
+        self._reset_registries()
         self.register_scalar_parameter(ScalarParameter(
             name="baseline",
             value=1.0,

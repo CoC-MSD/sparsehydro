@@ -2,7 +2,7 @@
 
 Extends test_calibration.py to cover:
   - Numerical accuracy for all 10 objective functions with known expected values
-  - _identify_pareto edge cases: single-objective, large fronts, dominance invariants
+  - identify_pareto edge cases: single-objective, large fronts, dominance invariants
   - CalibrationResult edge cases: empty history, all-minimise/all-maximise, list inputs
   - CalibrationProblem edge cases: single objective, maximised-only objectives,
     exception fallback penalty, bounds correctness, copy independence
@@ -34,13 +34,13 @@ from sparsehydro.calibration import (
     NashSutcliffe,
     PeakWeightedMSE,
 )
-from sparsehydro.calibration.objectives import (
+from sparsehydro.metrics.objectives import (
     PBIAS,
     IndexOfAgreement,
     LogNSE,
     VolumeRelativeError,
 )
-from sparsehydro.calibration.result import _identify_pareto
+from sparsehydro.calibration.result import identify_pareto
 from sparsehydro.enums import ModelState
 from sparsehydro.models import IModel
 from sparsehydro.parameters import ScalarParameter
@@ -294,7 +294,7 @@ class TestNewObjectives(unittest.TestCase):
 
 
 # ===========================================================================
-# III. _identify_pareto edge cases
+# III. identify_pareto edge cases
 # ===========================================================================
 
 class TestIdentifyParetoComprehensive(unittest.TestCase):
@@ -302,12 +302,12 @@ class TestIdentifyParetoComprehensive(unittest.TestCase):
     def test_single_objective_dominated(self):
         # Only minimum survives
         F = np.array([[3.0], [1.0], [2.0]])
-        self.assertEqual(_identify_pareto(F).tolist(), [False, True, False])
+        self.assertEqual(identify_pareto(F).tolist(), [False, True, False])
 
     def test_all_dominated_except_one(self):
         # First solution dominates all others
         F = np.array([[0.0, 0.0]] + [[float(i), float(i)] for i in range(1, 10)])
-        mask = _identify_pareto(F)
+        mask = identify_pareto(F)
         self.assertTrue(mask[0])
         self.assertFalse(any(mask[1:]))
 
@@ -319,13 +319,13 @@ class TestIdentifyParetoComprehensive(unittest.TestCase):
             [1.0, 1.0, 0.0],
             [0.5, 0.5, 0.5],
         ])
-        mask = _identify_pareto(F)
+        mask = identify_pareto(F)
         self.assertTrue(all(mask))
 
     def test_large_front_returns_correct_length(self):
         rng = np.random.default_rng(99)
         F = rng.uniform(0, 1, (100, 3))
-        mask = _identify_pareto(F)
+        mask = identify_pareto(F)
         self.assertEqual(len(mask), 100)
         self.assertTrue(mask.dtype == bool)
         self.assertTrue(mask.any())
@@ -334,7 +334,7 @@ class TestIdentifyParetoComprehensive(unittest.TestCase):
         # No member of the Pareto set may be dominated by another member
         rng = np.random.default_rng(11)
         F = rng.uniform(0, 10, (50, 2))
-        pareto_F = F[_identify_pareto(F)]
+        pareto_F = F[identify_pareto(F)]
         for i in range(len(pareto_F)):
             for j in range(len(pareto_F)):
                 if i == j:
@@ -557,7 +557,7 @@ class TestPlatypusSolverCore(unittest.TestCase):
     def test_pareto_front_is_non_dominated(self):
         result = self._solve(self.platypus.NSGAII, population_size=20)
         if len(result.pareto_F) > 1:
-            mask = _identify_pareto(result.pareto_F)
+            mask = identify_pareto(result.pareto_F)
             self.assertTrue(all(mask))
 
     def test_history_populated_with_record_frequency_1(self):
@@ -867,7 +867,7 @@ class TestParticleSwarmSolver(unittest.TestCase):
     def test_pareto_front_is_non_dominated(self):
         result = self.Solver(swarm_size=20, n_evaluations=400, seed=42).solve(self.problem)
         if len(result.pareto_F) > 1:
-            mask = _identify_pareto(result.pareto_F)
+            mask = identify_pareto(result.pareto_F)
             self.assertTrue(all(mask))
 
     # --- history ---

@@ -1,12 +1,23 @@
 name: Publish to PyPI
 
+# Runs when a GitHub release is published. Uses PyPI trusted publishing (no API
+# tokens); see RELEASING.md for the one-time setup on PyPI and GitHub.
+
 on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
+  tests:
+    name: Full test matrix
+    uses: ./.github/workflows/tests.yml
+    secrets: inherit
+
   build:
-    name: Build distribution
+    name: Build and check distributions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,10 +28,24 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build
+        run: pip install build twine packaging
 
       - name: Build source and wheel distributions
         run: python -m build
+
+      - name: Check tag, version, pre-release flag and changelog
+        run: >
+          python .github/scripts/check_release.py "${{ github.event.release.tag_name }}"
+          --prerelease "${{ github.event.release.prerelease }}" --dist dist
+
+      - name: Check package metadata
+        run: twine check --strict dist/*
+
+      - name: Install the wheel and import it
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          cd /tmp && /tmp/smoke/bin/python -c "import sparsehydro, sparsehydro.models, sparsehydro.calibration; print(sparsehydro.__version__)"
 
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4
@@ -28,22 +53,42 @@ jobs:
           name: dist
           path: dist/
 
-  publish:
+  testpypi:
+    name: Publish to TestPyPI
+    # Optional rehearsal: set the repository variable USE_TESTPYPI to "true"
+    # (Settings > Secrets and variables > Actions > Variables) to enable it.
+    if: vars.USE_TESTPYPI == 'true'
+    needs: [tests, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/sparsehydro
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  pypi:
     name: Publish to PyPI
-    needs: build
+    needs: [tests, build, testpypi]
+    # Run after TestPyPI succeeds, or when it is switched off (skipped).
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/p/sparsehydro
     permissions:
       id-token: write
-
     steps:
-      - name: Download distribution artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@release/v1

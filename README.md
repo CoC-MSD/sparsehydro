@@ -3,8 +3,8 @@
 **sparsehydro** provides abstract interfaces and utilities for building *parsimonious*
 (sparse-parameter) hydrological models in Python, with a focus on stormwater systems.
 
-[![Tests](https://github.com/MSDGC-SWM/sparsehydro/actions/workflows/tests.yml/badge.svg)](https://github.com/MSDGC-SWM/sparsehydro/actions/workflows/tests.yml)
-[![Docs](https://github.com/MSDGC-SWM/sparsehydro/actions/workflows/docs.yml/badge.svg)](https://MSDGC-SWM.github.io/sparsehydro)
+[![Tests](https://github.com/CoC-MSD/sparsehydro/actions/workflows/tests.yml/badge.svg)](https://github.com/CoC-MSD/sparsehydro/actions/workflows/tests.yml)
+[![Docs](https://github.com/CoC-MSD/sparsehydro/actions/workflows/docs.yml/badge.svg)](https://coc-msd.github.io/SparseHydro/)
 [![PyPI](https://img.shields.io/pypi/v/sparsehydro)](https://pypi.org/project/sparsehydro/)
 [![Python](https://img.shields.io/pypi/pyversions/sparsehydro)](https://pypi.org/project/sparsehydro/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -237,6 +237,24 @@ sequenceDiagram
 - **Interactive dashboards** — Plotly-based plots for Pareto evolution, parallel
   coordinates, calibration time-series with IQR bands, and multi-panel dashboards
 
+## Package layout
+
+| Package | Contents |
+|---|---|
+| `sparsehydro` | Core: `IModel`, `ScalarParameter`, `registry`, `ModelState` |
+| `sparsehydro.metrics` | Metric functions (`nash_sutcliffe`, `kge`, `pbias`, ...) and calibration objectives |
+| `sparsehydro.filters` | Savitzky-Golay smoothing, dry-weather patterns |
+| `sparsehydro.data` | File IO, data assembly, data service clients |
+| `sparsehydro.events` | Event detection, screening and records |
+| `sparsehydro.models` | Components (unit hydrographs, RDII, abstraction, snow, baseflow), `CompositeModel`, presets |
+| `sparsehydro.calibration` | `CalibrationProblem`, solvers, splits, Pareto selection, sequential fitting |
+| `sparsehydro.configuration` | Build models, objectives and solvers from a dict or JSON/YAML file |
+| `sparsehydro.visualization` | Interactive Plotly figures |
+| `sparsehydro.studies` | Study-specific workflows (for example `studies.msdgc`) |
+
+Each package imports only from the ones above it in this table; see
+[CONTRIBUTING.md](CONTRIBUTING.md#7-where-code-goes).
+
 ## Installation
 
 ```bash
@@ -245,18 +263,20 @@ pip install sparsehydro
 
 Optional extras:
 
-| Extra     | Command                            | Enables                                   |
-| --------- | ---------------------------------- | ----------------------------------------- |
-| `rdii`    | `pip install sparsehydro[rdii]`    | RDII model (pymoo + scipy)                |
-| `platypus`| `pip install sparsehydro[platypus]`| Full Platypus algorithm suite + PSO       |
-| `torch`   | `pip install sparsehydro[torch]`   | Gradient-based calibration via PyTorch    |
-| `docs`    | `pip install sparsehydro[docs]`    | Sphinx documentation build                |
-| `all`     | `pip install sparsehydro[all]`     | All optional extras                       |
+| Extra      | Command                               | Enables                                              |
+| ---------- | ------------------------------------- | ---------------------------------------------------- |
+| `speed`    | `pip install "sparsehydro[speed]"`    | Numba-compiled store kernels (much faster calibration) |
+| `parallel` | `pip install "sparsehydro[parallel]"` | Parallel CMA-ES seeds via joblib                     |
+| `excel`    | `pip install "sparsehydro[excel]"`    | Reading `.xlsx` event files                          |
+| `notebook` | `pip install "sparsehydro[notebook]"` | Running your own Jupyter notebooks (ipykernel, numba, openpyxl, kaleido) |
+| `docs`     | `pip install "sparsehydro[docs]"`     | Sphinx documentation build                           |
+| `dev`      | `pip install -e ".[dev]"`             | Everything needed to run the tests and build the docs |
 
-Interactive charts always require:
+A small sample dataset ships with the package:
 
-```bash
-pip install plotly
+```python
+from sparsehydro.sample_data import load_sample
+df = load_sample("tc-nb-001")   # 5-min rain [in] and stormflow [cfs], March 2022
 ```
 
 ## Quick start — custom model
@@ -350,9 +370,42 @@ fig = plot_pareto_evolution(result)
 fig.show()
 ```
 
+## Unit hydrographs
+
+Sixteen registered unit hydrographs share one convention: time parameters in
+hours and kernels that do not depend on the model time step. They include Nash
+cascade, gamma, SCS/NRCS, Snyder, Clark, ModClark, Weibull, lognormal,
+generalized gamma, mixtures, and the RTK triangle. Any of them can route
+rainfall excess in `RDIIModel`:
+
+```python
+from sparsehydro.models.rdii import RDIIModel, RTKTriangle
+from sparsehydro.models.unithydrograph import ClarkUH, NashUH
+
+model = RDIIModel(uh_components=[RTKTriangle(R=0.03, T=1.0, K=2.0), NashUH(n=3, K=2.0), ClarkUH(Tc=6, Rs=12)])
+```
+
+See [docs/unit_hydrographs.md](docs/unit_hydrographs.md) for the equations, the
+full table and how to add a formulation.
+
+## Examples
+
+Runnable scripts on the bundled sample data are in [examples/](examples/):
+fitting a unit hydrograph, comparing formulations, composing a model from a
+configuration file, and scoring a fit storm by storm.
+
 ## Documentation
 
-Full documentation is available at [cbuahin.github.io/sparsehydro](https://cbuahin.github.io/sparsehydro).
+Full documentation is available at [coc-msd.github.io/SparseHydro](https://coc-msd.github.io/SparseHydro/).
+
+## Contributing
+
+Contributions are welcome, including new model formulations. Please read
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request; it covers the
+development setup, how to add a formulation, testing, and repository rules
+(no notebooks, generated outputs, or large files in the repository).
+
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

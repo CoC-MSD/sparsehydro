@@ -90,6 +90,7 @@ source_suffix = {
 # MyST — enable mermaid directive in .md files
 myst_fence_as_directive = ["mermaid"]
 myst_enable_extensions = ["colon_fence", "deflist", "fieldlist"]
+myst_heading_anchors = 3
 
 master_doc = "index"
 
@@ -108,7 +109,7 @@ intersphinx_mapping = {
     "torch": ("https://pytorch.org/docs/stable", None),
 }
 
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "rdii_design.md", "unithydrograph_strategy.md", "combined_model.md", "ensemble_visualization_plan.md", "QAQC_dt.md", "parsimonious_integration_plan.md"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "rdii_design.md", "combined_model.md", "ensemble_visualization_plan.md", "QAQC_dt.md", "parsimonious_integration_plan.md"]
 
 suppress_warnings = [
     "ref.myst",
@@ -139,7 +140,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/MSDGC-SWM/sparsehydro",
+            "url": "https://github.com/CoC-MSD/sparsehydro",
             "icon": "fa-brands fa-github",
             "type": "fontawesome",
         },

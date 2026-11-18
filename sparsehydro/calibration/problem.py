@@ -46,15 +46,19 @@ are specified through a single ``column_map`` dictionary.  Values can be either 
 from __future__ import annotations
 
 import copy
+import warnings
 from typing import TYPE_CHECKING, Any, Callable, Union
 
 import numpy as np
 import pandas as pd
 
-from .objectives import IObjective
+from ..metrics.objectives import IObjective
 
 if TYPE_CHECKING:
     from ..models import IModel
+
+from .._columns import ColumnExtractor
+from .diagnostics import slow_response_warnings
 
 # Reserved keys in column_map that specify calibration roles, not column renames.
 _ROLE_KEYS = frozenset({"observed", "predicted", "mask"})
@@ -83,12 +87,7 @@ def _resolve_extractor(
     if callable(mapping_value):
         return mapping_value
     if isinstance(mapping_value, str):
-        col = mapping_value
-        return lambda data, c=col: (
-            data[c].to_numpy(dtype=float)
-            if isinstance(data, pd.DataFrame)
-            else np.asarray(data[c], dtype=float)
-        )
+        return ColumnExtractor(mapping_value, dtype=float)
     raise TypeError(
         f"column_map['{role}'] must be a column name (str) or callable; "
         f"got {type(mapping_value).__name__!r}."
@@ -168,6 +167,12 @@ class CalibrationProblem:
         carry their own ``mask`` override this default.  Positions where
         observed or predicted is ``NaN`` are always excluded regardless.
     :type mask: str or Callable or numpy.ndarray or None
+    :param skip_infeasible: When ``True``, a parameter vector that violates any
+        of the model's inequality constraints is not run: every objective gets
+        ``penalty_weight * (1 + sum(max(0, g)**2))`` instead. Use it for models
+        whose ``predict()`` refuses infeasible vectors. With
+        ``penalty_weight=0`` an infeasible vector scores 0.
+    :type skip_infeasible: bool
     :param prepare_kwargs: Extra keyword arguments forwarded to ``prepare_fn``.
     :type prepare_kwargs: Any
 
@@ -189,6 +194,8 @@ class CalibrationProblem:
         column_map: "dict[str, Any] | None" = None,
         prepare_fn: Callable | None = None,
         mask: "str | Callable | np.ndarray | None" = None,
+        *,
+        skip_infeasible: bool = False,
         **prepare_kwargs: Any,
     ) -> None:
         if objectives is None or len(objectives) == 0:
@@ -207,6 +214,7 @@ class CalibrationProblem:
         self._objectives = list(objectives)
         self._column_map = cmap
         self._prepare_fn = prepare_fn
+        self._skip_infeasible = bool(skip_infeasible)
         self._prepare_kwargs = prepare_kwargs
 
         # ------------------------------------------------------------------
@@ -233,6 +241,7 @@ class CalibrationProblem:
             )
         else:
             prepared_data = None
+        self._warn_about_slow_responses(model, prepared_data)
 
         # ------------------------------------------------------------------
         # Extract observed array
@@ -455,6 +464,17 @@ class CalibrationProblem:
     # Evaluation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _warn_about_slow_responses(model: "IModel", prepared_data: Any) -> None:
+        """Warn when a unit hydrograph's bounds allow responses slower than the record."""
+        try:
+            times = pd.to_datetime(prepared_data["datetime"])
+            record_hours = (times.iloc[-1] - times.iloc[0]) / pd.Timedelta(hours=1)
+        except Exception:  # noqa: BLE001 - no datetime column: nothing to compare against
+            return
+        for message in slow_response_warnings(model, float(record_hours)):
+            warnings.warn(message, UserWarning, stacklevel=3)
+
     def evaluate(self, x: np.ndarray, penalty_weight: float = 1e6) -> np.ndarray:
         """Apply a parameter vector, run ``predict()``, and return objectives.
 
@@ -474,6 +494,10 @@ class CalibrationProblem:
         :returns: 1-D array of length :attr:`n_objectives` in minimisation form.
         :rtype: numpy.ndarray
         """
+        if self._skip_infeasible:
+            penalty = self._infeasible_penalty(x, penalty_weight)
+            if penalty is not None:
+                return np.full(len(self._objectives), penalty)
         predicted, clean = self._run_model(x)
 
         F = np.empty(len(self._objectives), dtype=float)
@@ -514,6 +538,10 @@ class CalibrationProblem:
                 f"objective index {index} out of range for "
                 f"{len(self._objectives)} objectives"
             )
+        if self._skip_infeasible:
+            penalty = self._infeasible_penalty(x, penalty_weight)
+            if penalty is not None:
+                return penalty
         predicted, clean = self._run_model(x)
         val = self._score(index, self._objectives[index], predicted, clean)
         if penalty_weight > 0.0 and self._n_ieq_constr > 0:
@@ -524,6 +552,19 @@ class CalibrationProblem:
     # Evaluation internals
     # ------------------------------------------------------------------
 
+    def _apply(self, x: np.ndarray) -> None:
+        """Write the calibratable parameter vector *x* into the model."""
+        for name, val in zip(self._param_names, x):
+            self._model.apply_flat_parameter(name, float(val))
+
+    def _infeasible_penalty(self, x: np.ndarray, penalty_weight: float) -> float | None:
+        """Penalty for an infeasible *x*, or ``None`` when *x* is feasible."""
+        self._apply(x)
+        violation = np.maximum(np.asarray(self._model.inequality_constraints(), float), 0.0)
+        if violation.any():
+            return penalty_weight * (1.0 + float(np.sum(violation ** 2)))
+        return None
+
     def _run_model(self, x: np.ndarray) -> tuple[np.ndarray, bool]:
         """Apply *x*, run the model, and return the predicted array.
 
@@ -533,8 +574,7 @@ class CalibrationProblem:
             is free of NaN, so the precomputed selectors apply directly.
         :rtype: tuple[numpy.ndarray, bool]
         """
-        for name, val in zip(self._param_names, x):
-            self._model.apply_flat_parameter(name, float(val))
+        self._apply(x)
 
         if self._predicted_key is not None:
             arrays = self._model.predict_arrays()
@@ -607,15 +647,17 @@ class CalibrationProblem:
     # ------------------------------------------------------------------
 
     def make_copy(self) -> "CalibrationProblem":
-        """Return a deep-copied :class:`CalibrationProblem` safe for parallel workers.
+        """Return a deep copy of this problem that is safe for parallel workers.
 
         The deep-copied model already holds its prepared state; data preparation
         is not re-run.  All mutable state (model, observed array, bounds) is
         independent from the original.
 
+        Subclasses are preserved: the copy has the same type as ``self``.
+
         :rtype: CalibrationProblem
         """
-        cp = CalibrationProblem.__new__(CalibrationProblem)
+        cp = type(self).__new__(type(self))
         # Copy the whole namespace rather than enumerating fields: the previous
         # hand-written list had to be extended for every new attribute, and a
         # missed one surfaces as an AttributeError inside a worker process.

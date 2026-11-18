@@ -1,8 +1,13 @@
-"""NSGA-II multi-objective solver backed by pymoo.
+"""NSGA-II multi-objective solver backed by pymoo (deprecated).
+
+.. deprecated:: 1.0.0b2
+   Use the ``"nsga2"`` solver (:class:`~sparsehydro.calibration.solvers.PlatypusSolver`
+   with Platypus's NSGA-II). pymoo is no longer installed with sparsehydro and this
+   solver will be removed in a later release.
 
 Requires the optional ``pymoo`` dependency::
 
-    pip install sparsehydro[rdii]
+    pip install sparsehydro[pymoo]
 
 The solver wraps any :class:`~sparsehydro.calibration.problem.CalibrationProblem`
 inside a ``pymoo.ElementwiseProblem`` adapter and runs NSGA-II with SBX
@@ -13,15 +18,20 @@ minimisation form (maximised objectives are negated by
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from .base import ISolver
-from ..result import CalibrationResult, GenerationRecord, _identify_pareto
+from ..result import CalibrationResult, GenerationRecord, identify_pareto
 
 if TYPE_CHECKING:
     from ..problem import CalibrationProblem
+
+_DEPRECATION = ("NSGAIISolver (pymoo) is deprecated and will be removed in a later release; use the 'nsga2' "
+                "solver (Platypus NSGA-II): solver_registry.create('nsga2', n_evaluations=pop_size * n_gen, ...)")
+_INSTALL = "pymoo is required for the deprecated NSGAIISolver. Install with: pip install sparsehydro[pymoo]"
 
 
 try:
@@ -74,7 +84,7 @@ try:
                 pareto_mask = ranks == 0
                 n_pareto = int(np.sum(pareto_mask))
             except Exception:
-                pareto_mask = _identify_pareto(F)
+                pareto_mask = identify_pareto(F)
                 n_pareto = int(np.sum(pareto_mask))
 
             gen = int(algorithm.n_gen)
@@ -126,6 +136,7 @@ try:
             n_jobs: int = 1,
             callback=None,
         ) -> None:
+            warnings.warn(_DEPRECATION, DeprecationWarning, stacklevel=2)
             self.pop_size = pop_size
             self.n_gen = n_gen
             self.seed = seed
@@ -211,23 +222,12 @@ try:
 except ImportError:
 
     class _NSGAIISolverStub:
-        """Placeholder — requires ``pymoo``.
-
-        Install with::
-
-            pip install sparsehydro[rdii]
-        """
+        """Placeholder — requires ``pymoo`` (``pip install sparsehydro[pymoo]``); deprecated, use ``"nsga2"``."""
 
         def __init__(self, *args, **kwargs) -> None:
-            raise ImportError(
-                "pymoo is required for NSGAIISolver. "
-                "Install with: pip install sparsehydro[rdii]"
-            )
+            raise ImportError(_INSTALL)
 
         def solve(self, problem) -> None:
-            raise ImportError(
-                "pymoo is required for NSGAIISolver. "
-                "Install with: pip install sparsehydro[rdii]"
-            )
+            raise ImportError(_INSTALL)
 
     NSGAIISolver = _NSGAIISolverStub  # type: ignore[assignment, misc]

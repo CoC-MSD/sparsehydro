@@ -14,79 +14,87 @@ import numpy as np
 import pandas as pd
 
 from sparsehydro.models.unithydrograph import (
-    GammaUH, NashUH, TriangleUH, RectangleUH, DecayUH, GammaDelayUH, PeakTailUH,
+    SCSUH, ClarkUH, DecayUH, GammaDelayUH, GammaUH, GeneralizedGammaUH, LognormalUH,
+    MixtureUH, ModClarkUH, NashUH, PeakTailUH, RectangleUH, SnyderUH, TriangleUH, WeibullUH,
 )
 
 # Time-step sizes exercised for every kernel case.
-DT_CASES: dict[str, float] = {"5min": 5.0 / 60.0, "1hr": 1.0}
+DT_CASES: dict[str, float] = {"5min": 5.0 / 60.0, "15min": 0.25, "1hr": 1.0}
 
-# Parameter grids per model.  Each entry is (label, {param: value}).
-#
+# Parameter grids per model, all times in hours.  Each entry is (label, {param: value}).
 # Coverage intent: defaults, low/mid/high per parameter, degenerate edges, and
-# the points where the Step 6 kernel cap becomes active (marked CAP-ACTIVE).
+# responses long enough to hit the duration cap (TRUNCATION_ACTIVE).
 UH_CASES: dict[str, list[tuple[str, dict[str, float]]]] = {
     "GammaUH": [
         ("default", {}),
-        ("low", {"tt": 0.01, "tp": 0.01}),
-        ("mid", {"tt": 3.0, "tp": 50.0}),
-        ("high", {"tt": 5.0, "tp": 200.0}),          # CAP-ACTIVE (1001 -> 864)
-        ("extreme", {"tt": 50.0, "tp": 500.0}),      # CAP-ACTIVE (2501 -> 864)
+        ("low", {"alpha": 0.1, "theta": 0.01}),
+        ("mid", {"alpha": 3.0, "theta": 4.0}),
+        ("high", {"alpha": 5.0, "theta": 20.0}),
+        ("extreme", {"alpha": 50.0, "theta": 240.0}),
     ],
     "NashUH": [
         ("default", {}),
-        ("low", {"n": 0.01, "k": 0.01}),
-        ("mid", {"n": 3.0, "k": 10.0}),
-        ("high", {"n": 10.0, "k": 20.0}),            # CAP-ACTIVE (1001 -> 864)
-        ("overflow", {"n": 100.0, "k": 500.0}),      # CAP-ACTIVE; currently all-NaN
+        ("low", {"n": 0.1, "K": 0.01}),
+        ("mid", {"n": 3.0, "K": 1.0}),
+        ("high", {"n": 10.0, "K": 2.0}),
+        ("extreme", {"n": 50.0, "K": 240.0}),
     ],
     "TriangleUH": [
         ("default", {}),
-        ("degenerate_tp_ge_tt", {"tt": 10.0, "tp": 20.0}),   # returns zeros(1)
-        ("mid", {"tt": 200.0, "tp": 60.0}),
-        ("high", {"tt": 1000.0, "tp": 500.0}),       # CAP-ACTIVE (1001 -> 864)
+        ("infeasible_tp_gt_tb", {"Tp": 5.0, "Tb": 2.0}),
+        ("mid", {"Tp": 5.0, "Tb": 16.0}),
+        ("high", {"Tp": 40.0, "Tb": 80.0}),
     ],
     "RectangleUH": [
         ("default", {}),
-        ("low", {"tr": 1.0}),
-        ("mid", {"tr": 200.0}),
-        ("high", {"tr": 1000.0}),                    # CAP-ACTIVE (1001 -> 864)
+        ("low", {"Tr": 0.01}),
+        ("mid", {"Tr": 16.0}),
+        ("high", {"Tr": 80.0}),
     ],
     "DecayUH": [
         ("default", {}),
-        ("zero_alpha", {"alpha": 0.0}),              # returns array([1.0])
-        ("mid", {"alpha": 0.9}),
-        ("high", {"alpha": 0.999}),
+        ("mid", {"K": 2.0}),
+        ("high", {"K": 80.0}),
     ],
     "GammaDelayUH": [
         ("default", {}),
         ("no_delay", {"td": 0.0}),
-        ("mid", {"tt": 3.0, "tp": 30.0, "td": 20.0}),
-        ("high", {"tt": 5.0, "tp": 200.0, "td": 200.0}),
+        ("mid", {"alpha": 3.0, "theta": 2.0, "td": 2.0}),
     ],
     "PeakTailUH": [
         ("default", {}),
         ("peak_only", {"w": 0.0}),
         ("tail_only", {"w": 1.0}),
-        ("mid", {"w": 0.4, "td": 10.0, "peak_tp": 60.0, "peak_tt": 200.0,
-                 "tail_tt": 2.0, "tail_tp": 60.0}),
-        ("high", {"w": 0.7, "td": 50.0, "peak_tp": 500.0, "peak_tt": 1000.0,
-                  "tail_tt": 5.0, "tail_tp": 500.0}),
+        ("mid", {"w": 0.4, "td": 1.0, "peak_Tp": 5.0, "peak_Tb": 16.0,
+                 "tail_alpha": 3.0, "tail_theta": 5.0}),
     ],
+    "SCSUH": [("default", {}), ("mid", {"Tp": 4.0})],
+    "SnyderUH": [("default", {}), ("mid", {"tL": 3.0, "Cp": 0.4})],
+    "ClarkUH": [("default", {}), ("mid", {"Tc": 4.0, "Rs": 3.0}), ("small_storage", {"Rs": 0.001})],
+    "ModClarkUH": [("default", {})],
+    "WeibullUH": [("default", {}), ("mid", {"k": 3.0, "lam": 5.0})],
+    "LognormalUH": [("default", {}), ("heavy", {"mu": 5.5, "sigma": 2.0})],
+    "GeneralizedGammaUH": [("default", {}), ("mid", {"a": 3.0, "c": 0.7, "scale": 2.0})],
+    "MixtureUH": [("default", {})],
 }
 
 _CLASSES = {
     "GammaUH": GammaUH, "NashUH": NashUH, "TriangleUH": TriangleUH,
-    "RectangleUH": RectangleUH, "DecayUH": DecayUH,
-    "GammaDelayUH": GammaDelayUH, "PeakTailUH": PeakTailUH,
+    "RectangleUH": RectangleUH, "DecayUH": DecayUH, "GammaDelayUH": GammaDelayUH,
+    "PeakTailUH": PeakTailUH, "SCSUH": SCSUH, "SnyderUH": SnyderUH, "ClarkUH": ClarkUH,
+    "ModClarkUH": ModClarkUH, "WeibullUH": WeibullUH, "LognormalUH": LognormalUH,
+    "GeneralizedGammaUH": GeneralizedGammaUH, "MixtureUH": MixtureUH,
 }
 
-# Case ids whose kernels exceed MAX_STEPS today and will therefore change in
-# Step 6.  Listed explicitly so the test module can relax its tier for exactly
-# these and no others.
-CAP_ACTIVE: frozenset[str] = frozenset({
-    "GammaUH/high", "GammaUH/extreme",
-    "NashUH/high", "NashUH/overflow",
-    "TriangleUH/high", "RectangleUH/high",
+# Responses that reach MAX_DURATION_HOURS and are truncated and renormalised.
+TRUNCATION_ACTIVE: frozenset[str] = frozenset({
+    "GammaUH/extreme", "NashUH/extreme", "LognormalUH/heavy",
+})
+
+# Long-kernel cases also pinned on a 5000-step series, which takes the
+# overlap-add (FFT) convolution branch.
+LONG_CASES: frozenset[str] = frozenset({
+    "GammaUH/mid", "NashUH/high", "DecayUH/high", "PeakTailUH/mid",
 })
 
 
@@ -158,6 +166,13 @@ def observed_series(n: int, seed: int = 1) -> np.ndarray:
     return obs
 
 
-# Prediction series lengths: 600 straddles the profiled event window (direct
-# convolution branch), 5000 straddles the direct/FFT crossover.
+# Prediction series lengths: every case at 600 steps (direct convolution
+# branch); LONG_CASES also at 5000 steps (FFT branch).
 PREDICT_LENGTHS: tuple[int, ...] = (600, 5000)
+
+
+def predict_cases(n: int):
+    """Yield the UH cases pinned at series length *n*."""
+    for case_id, model_name, params in iter_uh_cases():
+        if n == PREDICT_LENGTHS[0] or case_id in LONG_CASES:
+            yield case_id, model_name, params
