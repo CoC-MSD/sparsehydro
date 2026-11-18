@@ -6,70 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ## [Unreleased]
 
-### Added
-
-- `calibration.PooledEventFitter`: one parameter set fitted to all global
-  events together (the model runs over the whole record; a weighted RMSE over
-  the events' peak and tail zones is minimised), scored per event
-  (`PooledFitResult.event_scores`) — the comparison for the per-event fits.
-- `GlobalSequentialFitter.fit` takes `progress(done, total, text)`,
-  `should_stop()` (raises `InterruptedError`) and `warm_start` (start each
-  event from the previous fit, the default, or from the model's values).
-
-- `sparsehydro.metrics`: `max_window_sum` (largest moving-window sum, earliest
-  window on ties), `sum_above` (amount above a threshold), `paired_summary`
-  (CCC, r², slopes and mean ratio of paired values, e.g. event volumes) and
-  `metrics.scorecard` (`Criterion`, `Scorecard`): criteria with pass and fail
-  bands graded pass / conditional / fail. The MSDGC zone volumes use
-  `max_window_sum` (same results). Lin's CCC is tested against the worked
-  example of the MSDGC Modeling Guidelines (Rev 5.8, Table 7-1).
-- `sparsehydro.studies.msdgc.scorecard.assess_calibration`: the MSDGC
-  calibration scorecard of the Modeling Guidelines Rev 5.8 (Volume II 6.4 and
-  7.1): storm volume with the base flow adjusted to each storm over the 24 h
-  before it (or total volume), zone volumes, Lin's CCC per zone and the Cinci
-  score for all, critical (April-July) and other months, Con15 as a percent
-  error, Qcritical at four levels from ODWF-A (Table 7-2; Qc1 graded), and the
-  pass / conditional / fail grade, with warnings for any missing input (the
-  result is then not official). `TOOL_ZONES` (the v5.0.5 tool, treatment
-  capped at 24 h) and `GUIDELINE_ZONES` (no cap). The existing total-flow
-  `MSDGCAssessment` is unchanged.
-
-- Model traces, a secondary output for plotting and checking:
-  `IModel.predict_trace()` returns the outputs plus every registered trace
-  field (`register_trace_field`, `trace_fields`, `trace_field_metadata`).
-  `FieldRecord` gains `role` (`output`, `component`, `state`, `flux`) and
-  `component_of`. `predict_arrays()` and calibration are unchanged.
-  `RDIIModel` reports each unit hydrograph's flow (`rdii_component_i`) and its
-  abstraction model's trace (`ia.*`); `MixtureUH` and `PeakTailUH` report their
-  parts; `EnsembleModel` its weighted contributions (sum mode) and each
-  child's outputs and trace as `alias.field`;
-  `CompositeModel` every child output and trace as `child.field`, with the
-  terms of a summed output as its components. Components always add up to
-  the series they belong to. See "Components and internal states" in
-  `docs/composition.md`.
-- Internal states in the trace: `IAModel` records the remaining abstraction
-  capacity (`ia_available`) and, with snow, `swe`, `snowfall` and `melt`; the
-  tank models record `tank_storage` and the effective-area multiplier
-  `tank_gain`. `compute_excess_series` and the compiled loops take an optional
-  `record` and are unchanged without it (same results, same speed). The
-  existing outputs of `SoilGroundwaterStore` and `DegreeDaySnow` are labelled
-  with their roles (`S_in`, `G_in`, `SWE_in` states; recharge, infiltration,
-  melt fluxes).
-
-### Changed
-
-- pymoo is no longer installed with sparsehydro: it moves to the optional
-  `pymoo` extra (`pip install sparsehydro[pymoo]`; included in `dev`). The
-  `"nsga2"` solver already uses Platypus's NSGA-II.
-
-### Deprecated
-
-- `NSGAIISolver` and the `"pymoo_nsga2"` solver (pymoo's NSGA-II) emit a
-  `DeprecationWarning` and will be removed in a later release; use the
-  `"nsga2"` solver (`n_evaluations = pop_size * n_gen` gives a comparable
-  budget).
-
-## [1.0.0b1] - 2026-11-15
+## [1.0.0b1] - 2026-11-18
 
 First beta of 1.0.0: the public API (models and the registry, composition and
 configuration, metrics and objectives, calibration and solvers) is complete
@@ -154,6 +91,51 @@ also contains the changes noted as 1.0.0a2, which was never tagged.
   parameter-bounds, and model-component visualizations.
 - Abstraction and composite model support for integrated rainfall-runoff
   workflows.
+- `calibration.PooledEventFitter`: one parameter set fitted to all global
+  events together (the model runs over the whole record; a weighted RMSE over
+  the events' peak and tail zones is minimised), scored per event
+  (`PooledFitResult.event_scores`) — the comparison for the per-event fits.
+- `GlobalSequentialFitter.fit` takes `progress(done, total, text)`,
+  `should_stop()` (raises `InterruptedError`) and `warm_start` (start each
+  event from the previous fit, the default, or from the model's values).
+- `sparsehydro.metrics`: `max_window_sum` (largest moving-window sum, earliest
+  window on ties), `sum_above` (amount above a threshold), `paired_summary`
+  (CCC, r², slopes and mean ratio of paired values, e.g. event volumes) and
+  `metrics.scorecard` (`Criterion`, `Scorecard`): criteria with pass and fail
+  bands graded pass / conditional / fail. The MSDGC zone volumes use
+  `max_window_sum` (same results). Lin's CCC is tested against the worked
+  example of the MSDGC Modeling Guidelines (Rev 5.8, Table 7-1).
+- `sparsehydro.studies.msdgc.scorecard.assess_calibration`: the MSDGC
+  calibration scorecard of the Modeling Guidelines Rev 5.8 (Volume II 6.4 and
+  7.1): storm volume with the base flow adjusted to each storm over the 24 h
+  before it (or total volume), zone volumes, Lin's CCC per zone and the Cinci
+  score for all, critical (April-July) and other months, Con15 as a percent
+  error, Qcritical at four levels from ODWF-A (Table 7-2; Qc1 graded), and the
+  pass / conditional / fail grade, with warnings for any missing input (the
+  result is then not official). `TOOL_ZONES` (the v5.0.5 tool, treatment
+  capped at 24 h) and `GUIDELINE_ZONES` (no cap). The existing total-flow
+  `MSDGCAssessment` is unchanged.
+- Model traces, a secondary output for plotting and checking:
+  `IModel.predict_trace()` returns the outputs plus every registered trace
+  field (`register_trace_field`, `trace_fields`, `trace_field_metadata`).
+  `FieldRecord` gains `role` (`output`, `component`, `state`, `flux`) and
+  `component_of`. `predict_arrays()` and calibration are unchanged.
+  `RDIIModel` reports each unit hydrograph's flow (`rdii_component_i`) and its
+  abstraction model's trace (`ia.*`); `MixtureUH` and `PeakTailUH` report their
+  parts; `EnsembleModel` its weighted contributions (sum mode) and each
+  child's outputs and trace as `alias.field`;
+  `CompositeModel` every child output and trace as `child.field`, with the
+  terms of a summed output as its components. Components always add up to
+  the series they belong to. See "Components and internal states" in
+  `docs/composition.md`.
+- Internal states in the trace: `IAModel` records the remaining abstraction
+  capacity (`ia_available`) and, with snow, `swe`, `snowfall` and `melt`; the
+  tank models record `tank_storage` and the effective-area multiplier
+  `tank_gain`. `compute_excess_series` and the compiled loops take an optional
+  `record` and are unchanged without it (same results, same speed). The
+  existing outputs of `SoilGroundwaterStore` and `DegreeDaySnow` are labelled
+  with their roles (`S_in`, `G_in`, `SWE_in` states; recharge, infiltration,
+  melt fluxes).
 
 ### Changed
 
@@ -245,6 +227,16 @@ also contains the changes noted as 1.0.0a2, which was never tagged.
   RDII results change at FFT round-off level (~1e-12 relative).
 - Tests write plot artifacts to a temporary directory, never into the
   repository.
+- pymoo is no longer installed with sparsehydro: it moves to the optional
+  `pymoo` extra (`pip install sparsehydro[pymoo]`; included in `dev`). The
+  `"nsga2"` solver already uses Platypus's NSGA-II.
+
+### Deprecated
+
+- `NSGAIISolver` and the `"pymoo_nsga2"` solver (pymoo's NSGA-II) emit a
+  `DeprecationWarning` and will be removed in a later release; use the
+  `"nsga2"` solver (`n_evaluations = pop_size * n_gen` gives a comparable
+  budget).
 
 ### Removed
 
