@@ -4,12 +4,16 @@ Only a small, stable *core* API is re-exported at the top level.  Everything
 else is intentionally accessed through its parent sub-package so that the public
 surface stays small and import paths mirror the package structure:
 
-- Models — :mod:`sparsehydro.models` (plus :mod:`sparsehydro.models.rdii` and
-  :mod:`sparsehydro.models.unithydrograph`)
-- Calibration — :mod:`sparsehydro.calibration`
-- Event detection — :mod:`sparsehydro.events`
+- Metrics and objectives — :mod:`sparsehydro.metrics`
 - Stormflow filters — :mod:`sparsehydro.filters`
+- Data IO and services — :mod:`sparsehydro.data`
+- Event detection — :mod:`sparsehydro.events`
+- Models — :mod:`sparsehydro.models` (plus :mod:`sparsehydro.models.rdii`,
+  :mod:`sparsehydro.models.unithydrograph` and :mod:`sparsehydro.models.presets`)
+- Calibration — :mod:`sparsehydro.calibration`
+- Building from configuration — :mod:`sparsehydro.configuration`
 - Visualization — :mod:`sparsehydro.visualization`
+- Study workflows — :mod:`sparsehydro.studies`
 
 Example::
 
@@ -20,10 +24,10 @@ Example::
 
 from .enums import ModelState
 from .parameters import FieldRecord, ScalarParameter, VectorParameter
-from .registry import ModelRegistry, registry
+from .registry import ModelRegistry, load_extensions, registry
 from .models import IModel, ITorchModel, IUnitHydroComponent
 
-__version__ = "0.1.0a1"
+__version__ = "1.0.0b1"
 
 __all__ = [
     "ModelState",
@@ -32,6 +36,7 @@ __all__ = [
     "VectorParameter",
     "ModelRegistry",
     "registry",
+    "load_extensions",
     "IModel",
     "ITorchModel",
     "IUnitHydroComponent",

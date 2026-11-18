@@ -111,20 +111,25 @@ try:
         result_df,
         title: str = "RDII Components",
         rainfall_label: str = "Rainfall [mm]",
+        component_label: str = "RDII [mm/step]",
     ) -> go.Figure:
         """Stacked RDII component traces alongside rainfall.
 
         The DataFrame must contain a ``datetime`` column (or similar time index)
         and any number of columns named ``rdii_component_N`` (N = 0, 1, 2, …).
-        A ``rainfall_mm`` column is optional; if absent, no rainfall panel is shown.
+        A ``rainfall_mm`` (or ``rainfall_in``) column is optional; if absent,
+        no rainfall panel is shown.
 
-        :param result_df: DataFrame produced by an RDIIModel run.  Must contain
-            ``rdii_component_N`` columns.
+        :param result_df: DataFrame produced by an RDIIModel run (e.g.
+            :meth:`~sparsehydro.models.rdii.RDIIModel.predict_components`).
+            Must contain ``rdii_component_N`` columns.
         :type result_df: pandas.DataFrame
         :param title: Figure title.
         :type title: str
         :param rainfall_label: Y-axis label for the rainfall panel.
         :type rainfall_label: str
+        :param component_label: Y-axis label for the stacked component panel.
+        :type component_label: str
         :returns: Plotly Figure with 2 rows (rainfall + stacked components) when
             rainfall is available, or 1 row otherwise.
         :rtype: plotly.graph_objects.Figure
@@ -149,7 +154,10 @@ try:
             else:
                 time_col = df.index
 
-        has_rainfall = "rainfall_mm" in df.columns
+        rainfall_col = next(
+            (c for c in ("rainfall_mm", "rainfall_in") if c in df.columns), None
+        )
+        has_rainfall = rainfall_col is not None
         n_rows = 2 if has_rainfall else 1
         row_heights = [0.25, 0.75] if has_rainfall else [1.0]
 
@@ -168,7 +176,7 @@ try:
             fig.add_trace(
                 go.Bar(
                     x=dt,
-                    y=df["rainfall_mm"].tolist(),
+                    y=df[rainfall_col].tolist(),
                     name=rainfall_label,
                     marker_color="steelblue",
                     opacity=0.7,
@@ -185,7 +193,7 @@ try:
                     x=dt,
                     y=df[col].tolist(),
                     mode="lines",
-                    name=col.replace("rdii_component_", "Triangle "),
+                    name=col.replace("rdii_component_", "Component "),
                     stackgroup="rdii",
                     line=dict(width=0.5, color=color),
                     fillcolor=_hex_to_rgba(color, 0.5),
@@ -193,7 +201,7 @@ try:
                 row=comp_row, col=1,
             )
 
-        fig.update_yaxes(title_text="RDII [mm/step]", row=comp_row, col=1)
+        fig.update_yaxes(title_text=component_label, row=comp_row, col=1)
         fig.update_xaxes(title_text="Date / Time", row=comp_row, col=1)
         fig.update_layout(
             title=title,

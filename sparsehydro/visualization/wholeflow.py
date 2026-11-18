@@ -1,0 +1,320 @@
+"""Full-resolution diagnostics extracted from the pattern whole-flow notebook.
+
+Builders return figures without displaying or exporting them. Clients can thin
+inline copies while retaining the complete HTML artifact.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+from sparsehydro.metrics.objectives import ConcordanceCorrelationCoefficient, NashSutcliffe
+from sparsehydro.data.services import DownloadResult
+from sparsehydro.models.baseflow import CenteredWeeklyPattern
+from sparsehydro.models.presets.wholeflow import PatternWholeFlowModel
+from .display import add_val_vrects
+from .._validation import verify_close
+from ..units import ACRE_INCH_TO_FT3
+
+
+def plot_water_balance(
+    data: pd.DataFrame, prediction: pd.DataFrame, model: PatternWholeFlowModel, *, dt_hours: float,
+) -> go.Figure:
+    """Verify and plot the full selected-area precipitation/storage budget."""
+    area = float(model.get_scalar_parameter("area_acres").value)
+    precipitation = model.budget["initial_storage_in"] + np.cumsum(data["rainfall_in"].to_numpy())
+    accounted = np.cumsum(
+        prediction["et_in"] + (prediction["gwi_cfs"] + prediction["rdii_cfs"])
+        * (dt_hours * 3600) / (area * ACRE_INCH_TO_FT3) + prediction["unrouted_excess_in"])
+    accounted += (prediction["S_in"] + prediction["G_in"]
+                  + prediction["routing_storage_in"] + prediction["SWE_in"])
+    verify_close(precipitation, accounted, atol=1e-8, rtol=0,
+                 what="Displayed budget (using the selected contributing area)")
+    fig = go.Figure()
+    for values, name in ((precipitation, "Precipitation + initial storage"),
+                         (accounted, "Outputs + S + G + routing + SWE")):
+        fig.add_trace(go.Scattergl(x=data["datetime"], y=values, name=name, mode="lines"))
+    fig.update_layout(title="Complete precipitation budget including snow", yaxis_title="Depth [in]")
+    return fig
+
+
+def plot_snow_diagnostics(
+    data: pd.DataFrame, prediction: pd.DataFrame, model: PatternWholeFlowModel, *,
+    data_title: str, warmup_steps: int, val_mask: np.ndarray,
+) -> go.Figure:
+    """Show upstream snow partition, liquid forcing, storage, and selected flow."""
+    times = pd.to_datetime(data["datetime"])
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True, vertical_spacing=.04,
+        subplot_titles=("Temperature / rain-snow threshold", "Precipitation partition and melt",
+                        "Snow water equivalent (stored water)", "Observed and modeled total flow"))
+    fig.add_trace(go.Scattergl(x=times, y=data["temperature_c"],
+                              name="Temperature [C]", mode="lines"), row=1, col=1)
+    if model.snow_config is not None:
+        fig.add_hline(y=model.snow_config.threshold_c, line_dash="dash", row=1, col=1)
+    for column, label in (("rain_liquid_in", "Liquid rain"), ("snowfall_in", "Snowfall (water equivalent)"),
+                          ("melt_in", "Snowmelt"), ("liquid_input_in", "Rain + melt to S/G")):
+        fig.add_trace(go.Scattergl(x=times, y=prediction[column], name=label, mode="lines"), row=2, col=1)
+    fig.add_trace(go.Scattergl(x=times, y=prediction["SWE_in"], name="SWE",
+                              mode="lines", fill="tozeroy"), row=3, col=1)
+    for values, label in ((data["flow_cfs"], "Observed total"), (prediction["total_cfs"], "Modeled total"),
+                          (prediction["gwi_cfs"], "G-store discharge"), (prediction["rdii_cfs"], "RTK RDII")):
+        fig.add_trace(go.Scattergl(x=times, y=values, name=label, mode="lines"), row=4, col=1)
+    add_val_vrects(fig, times, val_mask, row=4, col=1)
+    if warmup_steps > 0:
+        fig.add_vrect(x0=times.iloc[0], x1=times.iloc[warmup_steps - 1],
+                      fillcolor="#9E9E9E", opacity=.12, line_width=0)
+    for row, unit in enumerate(("C", "in/step", "in SWE", "cfs"), 1):
+        fig.update_yaxes(title_text=unit, row=row, col=1)
+    fig.update_layout(template="plotly_white", height=1000, hovermode="x unified",
+                      title=f"{data_title} - Snow upstream of unchanged S/G/RTK physics")
+    return fig
+
+
+def plot_baseflow_components(data: pd.DataFrame, *, val_mask: np.ndarray) -> go.Figure:
+    """Distinguish the detection reference from fitted sanitary and GWI flow."""
+    fig = go.Figure()
+    for column, name in (("baseflow_cfs", "Training-derived detection reference (estimate)"),
+                         ("joint_baseflow_cfs", "Predicted sanitary + GWI"),
+                         ("joint_sanitary_cfs", "Jointly fitted sanitary"), ("gwi_cfs", "Separate-store GWI")):
+        fig.add_trace(go.Scattergl(x=data["datetime"], y=data[column], name=name, mode="lines"))
+    add_val_vrects(fig, data["datetime"], val_mask)
+    fig.update_layout(title="Baseflow components; reference is not observed truth", yaxis_title="Flow [cfs]")
+    return fig
+
+
+def _series(result: DownloadResult | None) -> pd.Series | None:
+    """First value column of a parsed DownloadResult as a Series, or None."""
+    if result is None or result.dataframe is None or result.dataframe.empty:
+        return None
+    return result.dataframe.iloc[:, 0]
+
+
+def plot_input_timeseries(results: Mapping[str, DownloadResult], data_title: str) -> go.Figure:
+    """Plot native rainfall and available flow inputs without resampling."""
+    # ── Plot: rainfall hyetograph (top, inverted) over flow series (bottom) ──────
+
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        row_heights=[0.28, 0.72], vertical_spacing=0.05,
+        subplot_titles=("Rainfall", "Flow"),
+    )
+
+    # Rainfall on the top row as a WebGL filled area on an inverted axis, so it
+    # hangs from the top like a hyetograph. (A filled Scattergl trace stays fast for
+    # a full year of 5-minute data, where 100k+ Bar rects would not.)
+    rain = _series(results.get("Rain"))
+
+    if rain is not None:
+        fig.add_trace(
+            go.Scattergl(x=rain.index, y=rain.values, name="Rainfall", mode="lines",
+                         line=dict(color="#1f77b4", width=0.5), fill="tozeroy",
+                         fillcolor="rgba(31,119,180,0.45)"),
+            row=1, col=1,
+        )
+        fig.update_yaxes(title_text="Rain [in]", autorange="reversed", row=1, col=1)
+
+    # Flow / base-flow / storm-flow on the bottom row as WebGL line traces.
+    for data_type, color in (("Flow", "#d62728"), ("BaseFlow", "#2ca02c"),
+                             ("StormFlow", "#ff7f0e")):
+        s = _series(results.get(data_type))
+        if s is not None:
+            fig.add_trace(
+                go.Scattergl(x=s.index, y=s.values, mode="lines", name=data_type,
+                             line=dict(color=color, width=1)),
+                row=2, col=1,
+            )
+
+    fig.update_yaxes(title_text="Flow [MGD]", row=2, col=1)
+    fig.update_xaxes(title_text="Time", row=2, col=1)
+    fig.update_layout(
+        title=f"FlowFinity — {data_title}",
+        height=800, 
+        width=1600,
+        hovermode="x unified",
+        # legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="left", x=0),
+    )
+    #thin_for_display(fig, DISPLAY_MAX_POINTS).show()
+    return fig
+
+
+def plot_sanitary_shapes(pattern: CenteredWeeklyPattern) -> go.Figure:
+    """Show centered training-derived hourly and weekday anomalies."""
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Centered hourly shape", "Centered weekday shape"))
+    fig.add_trace(go.Scattergl(x=list(range(24)), y=pattern.hourly,
+                              name="hour anomaly"), row=1, col=1)
+    fig.add_trace(go.Scattergl(x=list(range(7)), y=pattern.weekday,
+                              name="weekday anomaly"), row=1, col=2)
+    fig.update_yaxes(title_text="Anomaly [cfs]")
+    fig.update_layout(title="Training-derived shapes only; mean and amplitudes are fitted jointly")
+    return fig
+
+
+def plot_ia_store(data: pd.DataFrame, model: PatternWholeFlowModel, *, data_title: str, warmup_steps: int) -> go.Figure:
+    """Show the selected IA storage and liquid input, including the unscored warmup."""
+    # ── P1 · IA store state S(t) vs rainfall ─────────────────────────────────────
+
+    _t = pd.to_datetime(data["datetime"])
+    _S = data["S_in"].to_numpy()
+    _rain = data["liquid_input_in"].to_numpy()
+    _s_max = model.get_scalar_parameter("s_max").value
+    _rmax = max(float(np.nanmax(_rain)), 1e-6)
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(go.Scattergl(x=_t, y=_S, name="IA store S = filled depth [in]",
+                               mode="lines", line=dict(color="#8c564b", width=1.3),
+                               fill="tozeroy", fillcolor="rgba(140,86,75,0.18)"),
+                  secondary_y=False)
+    # fig.add_hline(y=_s_max, line=dict(color="#8c564b", width=1, dash="dot"),
+    #               annotation_text=f"s_max = {_s_max:.3f} in", annotation_position="bottom right")
+    # fig.add_trace(go.Bar(x=_t, y=_rain, name="Rainfall [in/step]",
+    #                      marker=dict(color="#1f77b4")), secondary_y=True)
+    # if not data.empty:
+    if not data.empty:
+        fig.add_trace(
+            go.Scattergl(x=_t, y=_rain, name="Rain + snowmelt", mode="lines",
+                         line=dict(color="#faa811", width=1.0), fill=None,
+                         fillcolor="rgba(31,119,180,0.45)"), secondary_y=True,
+            row=1, col=1,
+        )
+
+
+    if warmup_steps > 0:
+        fig.add_vrect(x0=_t.iloc[0], x1=_t.iloc[warmup_steps - 1], fillcolor="#9E9E9E",
+                      opacity=0.10, line_width=0, annotation_text="warmup",
+                      annotation_position="top left")
+    fig.update_yaxes(title_text="IA store S [in]", secondary_y=False)
+    fig.update_yaxes(title_text="Liquid input [in/step]", range=[_rmax * 4.0, 0.0],
+                     secondary_y=True, showgrid=False)
+    fig.update_layout(template="plotly_white", height=500, width=1500, hovermode="x unified",
+                      title=f"{data_title} - Method B: IA store S(t) vs rain + snowmelt",
+                      xaxis_title="Date", bargap=0,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+    return fig
+
+
+def plot_groundwater_store(data: pd.DataFrame, prediction: pd.DataFrame, model: PatternWholeFlowModel, *, data_title: str, dt_hours: float) -> go.Figure:
+    """Show separate S/G depth scales, slow groundwater release, and capacity spill."""
+    _t = pd.to_datetime(data["datetime"])
+    _S = data["S_in"].to_numpy()
+    # ── P2 · Deep store G(t) alongside S(t), and the GWI it releases ─────────────
+    _G = data["G_in"].to_numpy()
+    _g_max = model.get_scalar_parameter("g_max").value
+
+    _depth_to_cfs = float(model.get_scalar_parameter("area_acres").value) * ACRE_INCH_TO_FT3 / (dt_hours * 3600)
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.3, 0.3, 0.4],
+                        vertical_spacing=0.07,
+                        subplot_titles=("S: source store", "G: own depth scale, with capacity",
+                                        "G-store discharge = slow release + spill"))
+    fig.add_trace(go.Scattergl(x=_t, y=_S, name="S [in]", mode="lines",
+                               line=dict(color="#8c564b", width=1.0)), row=1, col=1)
+    fig.add_trace(go.Scattergl(x=_t, y=_G, name="G [in] (deep store)", mode="lines",
+                               line=dict(color="#9467bd", width=1.5),
+                               fill="tozeroy", fillcolor="rgba(148,103,189,0.20)"), row=2, col=1)
+    fig.add_hline(y=_g_max, line=dict(color="#9467bd", width=1, dash="dot"),
+                  annotation_text=f"g_max = {_g_max:.6g} in", annotation_position="top right",
+                  row=2, col=1)
+    fig.add_trace(go.Scattergl(x=_t, y=data["gwi_cfs"], name="Total G discharge [cfs]", mode="lines",
+                               line=dict(color="#1f77b4", width=1.3)), row=3, col=1)
+    for _column, _label in (("gwi_release_in", "Slow G release"), ("gwi_spill_in", "G capacity spill")):
+        fig.add_trace(go.Scattergl(x=_t, y=prediction[_column] * _depth_to_cfs,
+            name=f"{_label} [cfs]", mode="lines"), row=3, col=1)
+    fig.update_yaxes(title_text="S [in]", row=1, col=1)
+    fig.update_yaxes(title_text="G [in]", row=2, col=1)
+    fig.update_yaxes(title_text="Flow [cfs]", row=3, col=1)
+    fig.update_layout(template="plotly_white", height=850, width=1500, hovermode="x unified",
+                      title=f"{data_title} - Deep store G: storage, slow release and spill",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+    return fig
+
+
+def plot_stormflow(data: pd.DataFrame, events: pd.DataFrame, *, data_title: str, warmup_steps: int, val_mask: np.ndarray) -> go.Figure:
+    """Compare selected RDII and the detection reference over frozen assessment events."""
+    # --- P5 - RTK RDII vs observed stormflow, event windows shaded ---------------
+
+    _t = pd.to_datetime(data["datetime"])
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.28, 0.28, 0.44],
+                        vertical_spacing=0.05,
+                        subplot_titles=("Live liquid excess (rain + melt, after S partition)", "Stormflow", "Store S (Antecedent Condition)"))
+    fig.add_trace(go.Scattergl(x=_t, y=data["excess_in"], name="excess [in/step]",
+                               mode="lines", line=dict(color="#1f77b4", width=0.6),
+                               fill="tozeroy", fillcolor="rgba(31,119,180,0.40)"), row=1, col=1)
+    fig.update_yaxes(title_text="excess [in]", autorange="reversed", row=1, col=1)
+    fig.add_trace(go.Scattergl(x=_t, y=data["stormflow"], name="Observed stormflow",
+                               mode="lines", line=dict(color="#444444", width=1)), row=2, col=1)
+    fig.add_trace(go.Scattergl(x=_t, y=data["rdii_cfs"], name="RTK RDII (model)",
+                               mode="lines", line=dict(color="#d62728", width=1.2)), row=2, col=1)
+    for _e in events.itertuples():
+        fig.add_vrect(x0=_t.iloc[_e.start_idx], x1=_t.iloc[min(_e.end_idx, len(_t) - 1)],
+                      fillcolor="#00ff00", opacity=0.12, line_width=0, row=2, col=1)
+    if warmup_steps > 0:
+        fig.add_vrect(x0=_t.iloc[0], x1=_t.iloc[warmup_steps - 1], fillcolor="#9E9E9E",
+                      opacity=0.14, line_width=0, row=2, col=1)
+    add_val_vrects(fig, _t, val_mask, row=2, col=1)
+    fig.update_yaxes(title_text="Flow [cfs]", row=2, col=1)
+    fig.update_yaxes(title_text="Store S [in]", row=3, col=1)
+    fig.add_trace(go.Scattergl(x=_t, y=data["S_in"].to_numpy(), name="IA store S = filled depth [in]",
+                               mode="lines", line=dict(color="#8c564b", width=1.3),
+                               fill="tozeroy", fillcolor="rgba(140,86,75,0.18)"),
+                  row=3, col=1)
+    fig.update_layout(template="plotly_white", height=650, width=1500, hovermode="x unified",
+                      title=f"{data_title} - JOINT: RTK RDII vs observed stormflow",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+    #thin_for_display(fig, DISPLAY_MAX_POINTS).show()
+    return fig
+
+
+def plot_total_flow(data: pd.DataFrame, prediction: pd.DataFrame, events: pd.DataFrame, *, warmup_steps: int, train_mask: np.ndarray, val_mask: np.ndarray) -> go.Figure:
+    """Compare selected total flow with observations and annotate split metrics."""
+    _ccc, _nse = ConcordanceCorrelationCoefficient(), NashSutcliffe()
+    # --- P6 - Whole hydrograph: sanitary + GWI + RDII vs observed total flow -----
+
+    _t = pd.to_datetime(data["datetime"])
+    _floor = data["joint_sanitary_cfs"].to_numpy()   # fitted sanitary (SANITARY_MODE)
+    _fg = prediction["baseflow_cfs"].to_numpy()                       # sanitary + GWI (jointly fit baseflow)
+    _tot = data["total_cfs"].to_numpy()
+    ccc_tot = _ccc.compute(data["flow_cfs"].to_numpy(), _tot, mask=train_mask)
+    nse_tot = _nse.compute(data["flow_cfs"].to_numpy(), _tot, mask=train_mask)
+    _vtxt = (f"  |  val CCC={_ccc.compute(data['flow_cfs'].to_numpy(), _tot, mask=val_mask):.3f}  "
+             f"NSE={_nse.compute(data['flow_cfs'].to_numpy(), _tot, mask=val_mask):.3f}" if val_mask.any() else "")
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.25, 0.75],
+                        vertical_spacing=0.05, subplot_titles=("Rainfall", "Total flow"))
+    fig.add_trace(go.Scattergl(x=_t, y=data["rainfall_in"], name="Rainfall",
+                               mode="lines", line=dict(color="#1f77b4", width=0.5),
+                               fill="tozeroy", fillcolor="rgba(31,119,180,0.45)"),
+                  row=1, col=1)
+    fig.add_trace(go.Scattergl(x=_t, y=data["flow_cfs"].to_numpy(), name="Observed total flow",
+                               mode="lines", line=dict(color="#000000", width=1)), row=2, col=1)
+    fig.add_trace(go.Scattergl(x=_t, y=_tot, name="Model total (sanitary + GWI + RDII)",
+                               mode="lines", line=dict(color="#fc0000", width=1.3)), row=2, col=1)
+    # fig.add_trace(go.Scattergl(x=_t, y=_fg, name="sanitary + GWI (baseflow)",
+    #                            mode="lines", line=dict(color="#2ca02c", width=1, dash="dash")), row=2, col=1)
+    # fig.add_trace(go.Scattergl(x=_t, y=_floor, name=f"sanitary ({SANITARY_MODE})",
+    #                            mode="lines", line=dict(color="#8c564b", width=1, dash="dot")), row=2, col=1)
+    if warmup_steps > 0:
+        fig.add_vrect(x0=_t.iloc[0], x1=_t.iloc[warmup_steps - 1], fillcolor="#9E9E9E",
+                      opacity=0.10, line_width=0, annotation_text="warmup (unscored)",
+                      annotation_position="top left", row=2, col=1)
+    add_val_vrects(fig, _t, val_mask, row=2, col=1)
+    for _e in events.itertuples():
+        fig.add_vrect(x0=_t.iloc[_e.start_idx], x1=_t.iloc[min(_e.end_idx, len(_t) - 1)],
+                      fillcolor="#55ff00", opacity=0.08, line_width=0, row=2, col=1)
+    fig.update_yaxes(title_text="Rain [in/step]", autorange="reversed", rangemode="tozero", row=1, col=1)
+    fig.update_yaxes(title_text="Flow [cfs]", row=2, col=1)
+    fig.update_xaxes(title_text="Date", row=2, col=1)
+    fig.update_layout(template="plotly_white", height=750, width=1500, hovermode="x unified",
+                      title=f"JOINT whole-flow model vs observed  "
+                            f"[train CCC={ccc_tot:.3f}  NSE={nse_tot:.3f}{_vtxt}]",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+
+    #thin_for_display(fig, DISPLAY_MAX_POINTS).show()
+    return fig
+
+

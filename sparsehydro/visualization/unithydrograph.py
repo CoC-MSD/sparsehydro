@@ -16,13 +16,18 @@ Functions
 from __future__ import annotations
 
 import numpy as np
+
+from ..metrics.functions import fit_summary
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from ..events import EventRecord
+from ..events.records import SubEventRecord, GlobalEvent
+from ..events.smoothing import VariableSavgolResult
 from ..filters import FilterResult
-from ..models.unithydrograph.sequential import SequentialFitSummary
+from ..models.base import IUnitHydroComponent
+from ..calibration.sequential import SequentialFitSummary
 
 _D3 = [
     "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
@@ -676,6 +681,244 @@ def plot_effective_area(
     return fig
 
 
+def plot_variable_savgol(
+    savgol_result: VariableSavgolResult,
+    rain_stormflow: pd.DataFrame | None = None,
+    title: str = "Variable-Window Savitzky-Golay Smoothing",
+) -> go.Figure:
+    """Plot raw vs variable-window smoothed flow with curvature and window size.
+
+    :param savgol_result: Result from
+        :func:`~sparsehydro.events.variable_savgol_smooth` /
+        :func:`~sparsehydro.events.detect_event_hierarchy`.
+    :type savgol_result: VariableSavgolResult
+    :param rain_stormflow: Optional frame with ``datetime`` and ``rain`` to add a
+        rainfall panel on top.
+    :type rain_stormflow: pandas.DataFrame | None
+    :param title: Figure title.
+    :type title: str
+    :returns: Plotly figure (raw+smoothed, then curvature with window size axis).
+    :rtype: plotly.graph_objects.Figure
+    """
+    dt = pd.to_datetime(savgol_result.datetime)
+    has_rain = rain_stormflow is not None and "rain" in getattr(rain_stormflow, "columns", [])
+    if has_rain:
+        fig = make_subplots(
+            rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+            row_heights=[0.22, 0.48, 0.30],
+            specs=[[{}], [{}], [{"secondary_y": True}]],
+        )
+        flow_row, curv_row = 2, 3
+        rdt = pd.to_datetime(rain_stormflow["datetime"])
+        fig.add_trace(go.Bar(x=rdt, y=rain_stormflow["rain"], name="Rainfall",
+                             marker_color="steelblue", opacity=0.7), row=1, col=1)
+        fig.update_yaxes(autorange="reversed", title_text="Rain", row=1, col=1)
+    else:
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+            row_heights=[0.6, 0.4], specs=[[{}], [{"secondary_y": True}]],
+        )
+        flow_row, curv_row = 1, 2
+
+    fig.add_trace(go.Scatter(x=dt, y=savgol_result.raw_flow, name="Raw flow",
+                             line=dict(color="lightgray", width=1)), row=flow_row, col=1)
+    fig.add_trace(go.Scatter(x=dt, y=savgol_result.smoothed, name="Smoothed",
+                             line=dict(color="#1f77b4", width=2)), row=flow_row, col=1)
+    peaks = np.asarray(savgol_result.peak_idxs, dtype=int)
+    peaks = peaks[(peaks >= 0) & (peaks < len(dt))]
+    if peaks.size:
+        fig.add_trace(go.Scatter(x=np.asarray(dt)[peaks], y=np.asarray(savgol_result.smoothed)[peaks],
+                                 mode="markers", name="Peaks",
+                                 marker=dict(color="crimson", symbol="diamond", size=7)),
+                      row=flow_row, col=1)
+    fig.update_yaxes(title_text="Flow", row=flow_row, col=1)
+
+    fig.add_trace(go.Scatter(x=dt, y=savgol_result.curvature, name="Curvature (final)",
+                             line=dict(color="#9467bd", width=1)), row=curv_row, col=1)
+    fig.add_trace(go.Scatter(x=dt, y=savgol_result.seed_curvature, name="Curvature (seed)",
+                             line=dict(color="#17becf", width=1, dash="dot")), row=curv_row, col=1)
+    fig.add_trace(go.Scatter(x=dt, y=savgol_result.windows, name="Window size",
+                             line=dict(color="#2ca02c", width=1), opacity=0.6),
+                  row=curv_row, col=1, secondary_y=True)
+    fig.update_yaxes(title_text="d²/dt²", row=curv_row, col=1, secondary_y=False)
+    fig.update_yaxes(title_text="Window", row=curv_row, col=1, secondary_y=True)
+
+    fig.update_layout(title=title, hovermode="x unified", height=650 if has_rain else 520,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02))
+    return fig
+
+
+def plot_event_hierarchy(
+    rain_stormflow: pd.DataFrame,
+    global_events: list[GlobalEvent],
+    sub_events: list[SubEventRecord],
+    savgol_result: VariableSavgolResult | None = None,
+    title: str = "Global + Sub-Event Hierarchy",
+) -> go.Figure:
+    """Plot rainfall and flow with global-event bands and sub-event peak zones.
+
+    :param rain_stormflow: Frame with ``datetime``, ``rain``, ``stormflow``.
+    :type rain_stormflow: pandas.DataFrame
+    :param global_events: Global events (outer shaded bands).
+    :type global_events: list[GlobalEvent]
+    :param sub_events: Sub-events (peak-zone shading + peak markers, coloured by
+        ``global_id``).
+    :type sub_events: list[SubEventRecord]
+    :param savgol_result: Optional smoothing result; when given its smoothed
+        curve is drawn instead of the raw flow.
+    :type savgol_result: VariableSavgolResult | None
+    :param title: Figure title.
+    :type title: str
+    :returns: Two-row Plotly figure (rain over flow).
+    :rtype: plotly.graph_objects.Figure
+    """
+    df = rain_stormflow.copy()
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    dt = df["datetime"]
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+                        row_heights=[0.25, 0.75])
+
+    fig.add_trace(go.Bar(x=dt, y=df["rain"], name="Rainfall",
+                         marker_color="steelblue", opacity=0.7), row=1, col=1)
+    fig.update_yaxes(autorange="reversed", title_text="Rain", row=1, col=1)
+
+    if savgol_result is not None:
+        fig.add_trace(go.Scatter(x=pd.to_datetime(savgol_result.datetime), y=savgol_result.smoothed,
+                                 name="Smoothed flow", line=dict(color="black", width=1.2)), row=2, col=1)
+    else:
+        fig.add_trace(go.Scatter(x=dt, y=df["stormflow"], name="Stormflow",
+                                 line=dict(color="black", width=1.2)), row=2, col=1)
+
+    for ge in global_events:
+        fig.add_vrect(x0=ge.start_datetime, x1=ge.end_datetime, fillcolor="gray",
+                      opacity=0.08, line_width=0, row=2, col=1)
+
+    for s in sub_events:
+        color = _solid_event_color(int(getattr(s, "global_id", 0)))
+        fill = _event_color(int(getattr(s, "global_id", 0)), alpha=0.18)
+        fig.add_vrect(x0=s.rise_start_datetime, x1=s.tail_start_datetime,
+                      fillcolor=fill, line_width=0, row=2, col=1)
+        label = (f"E{s.sub_id} (G{s.global_id})<br>Ae={s.effective_area:.1f}"
+                 f"<br>BI={s.bimodality_index:.2f}{' ⑂' if s.is_bimodal else ''}")
+        fig.add_trace(go.Scatter(
+            x=[s.peak_datetime], y=[s.peak_flow], mode="markers",
+            marker=dict(color=color, symbol="diamond", size=9,
+                        line=dict(color="white", width=1)),
+            name=f"E{s.sub_id}", showlegend=False, hovertext=[label], hoverinfo="text",
+        ), row=2, col=1)
+    fig.update_yaxes(title_text="Flow", row=2, col=1)
+    fig.update_layout(title=title, hovermode="x unified", height=600, showlegend=True,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02))
+    return fig
+
+
+def plot_uh_shapes(
+    models,
+    dt_hours: float = 1.0,
+    title: str = "Unit Hydrograph Shapes",
+) -> go.Figure:
+    """Plot the normalized kernel ordinates of one or more UH components.
+
+    :param models: A single :class:`~sparsehydro.models.IUnitHydroComponent`, a
+        list of ``(label, model)`` pairs, or a ``{label: model}`` mapping.  Each
+        model is initialized/validated if needed.
+    :type models: IUnitHydroComponent | list | dict
+    :param dt_hours: Time-step size for the kernel evaluation [hr].
+    :type dt_hours: float
+    :param title: Figure title.
+    :type title: str
+    :returns: Plotly figure of ordinate vs time with area/centroid annotations.
+    :rtype: plotly.graph_objects.Figure
+    """
+    if isinstance(models, dict):
+        items = list(models.items())
+    elif isinstance(models, IUnitHydroComponent):
+        items = [(type(models).__name__, models)]
+    else:
+        items = [(lbl, m) for lbl, m in models]
+
+    fig = go.Figure()
+    for i, (label, model) in enumerate(items):
+        if not (model.is_validated() or model.is_prepared() or model.is_predicted()):
+            if model.is_created():
+                model.initialize()
+            model.validate()
+        kernel = np.asarray(model.get_kernel(dt_hours), dtype=float)
+        t = np.arange(len(kernel)) * dt_hours
+        color = _solid_event_color(i)
+        area = float(np.sum(kernel) * dt_hours)
+        centroid = float(np.sum(t * kernel) / np.sum(kernel)) if kernel.sum() > 0 else 0.0
+        fig.add_trace(go.Scatter(x=t, y=kernel, mode="lines", name=f"{label} (area={area:.2f})",
+                                 line=dict(color=color, width=2), fill="tozeroy",
+                                 fillcolor=_event_color(i, alpha=0.12)))
+        fig.add_vline(x=centroid, line=dict(color=color, width=1, dash="dot"))
+    fig.update_layout(title=title, xaxis_title="Time [hr]", yaxis_title="UH ordinate [1/hr]",
+                      hovermode="x unified", height=460,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02))
+    return fig
+
+
+def _fit_metrics(obs: np.ndarray, pred: np.ndarray) -> dict:
+    """NSE, PBIAS, R² and fractional peak error for the convolution panel."""
+    summary = fit_summary(obs, pred)
+    return {"NSE": summary["nse"], "PBIAS": summary["pbias"], "R2": summary["r2"],
+            "peak_err": summary["peak_error_pct"] / 100.0}
+
+
+def plot_convolution(
+    summary: SequentialFitSummary,
+    event=None,
+    title: str = "Convolution — Observed vs Predicted",
+) -> go.Figure:
+    """Plot observed vs predicted flow with residuals and goodness-of-fit metrics.
+
+    :param summary: Sequential-fit summary providing observed and predicted flow.
+    :type summary: SequentialFitSummary
+    :param event: Optional event exposing ``start_datetime`` / ``end_datetime`` to
+        restrict the plot to a single window.
+    :type event: object | None
+    :param title: Figure title.
+    :type title: str
+    :returns: Two-row Plotly figure (obs/pred over residuals) with an NSE/PBIAS/
+        R²/peak-error annotation.
+    :rtype: plotly.graph_objects.Figure
+    """
+    obs_df = summary.global_observed.copy()
+    pred_df = summary.global_predicted.copy()
+    obs_df["datetime"] = pd.to_datetime(obs_df["datetime"])
+    pred_df["datetime"] = pd.to_datetime(pred_df["datetime"])
+    merged = pd.merge(obs_df, pred_df, on="datetime", how="inner")
+    if event is not None:
+        s = pd.Timestamp(event.start_datetime)
+        e = pd.Timestamp(event.end_datetime)
+        merged = merged[(merged["datetime"] >= s) & (merged["datetime"] <= e)]
+
+    dt = merged["datetime"]
+    obs = merged["stormflow"].to_numpy(dtype=float)
+    pred = merged["Q_pred"].to_numpy(dtype=float)
+    resid = pred - obs
+    m = _fit_metrics(obs, pred)
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06,
+                        row_heights=[0.7, 0.3])
+    fig.add_trace(go.Scatter(x=dt, y=obs, name="Observed", line=dict(color="black", width=1.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=dt, y=pred, name="Predicted",
+                             line=dict(color="crimson", width=1.5, dash="dash")), row=1, col=1)
+    pos = resid >= 0
+    fig.add_trace(go.Bar(x=dt[pos], y=resid[pos], name="Resid +", marker_color="#2ca02c"), row=2, col=1)
+    fig.add_trace(go.Bar(x=dt[~pos], y=resid[~pos], name="Resid −", marker_color="#1f77b4"), row=2, col=1)
+
+    ann = (f"NSE={m['NSE']:.3f}  PBIAS={m['PBIAS']:.1f}%  "
+           f"R²={m['R2']:.3f}  peakErr={m['peak_err']*100:.1f}%")
+    fig.add_annotation(xref="paper", yref="paper", x=0.01, y=0.99, showarrow=False,
+                       text=ann, bgcolor="rgba(255,255,255,0.7)", align="left")
+    fig.update_yaxes(title_text="Flow", row=1, col=1)
+    fig.update_yaxes(title_text="Residual", row=2, col=1)
+    fig.update_layout(title=title, hovermode="x unified", height=600,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02))
+    return fig
+
+
 __all__ = [
     "plot_rainfall_flow_with_events",
     "plot_filter_signals",
@@ -683,4 +926,8 @@ __all__ = [
     "plot_sequential_fit",
     "plot_parameter_evolution",
     "plot_effective_area",
+    "plot_variable_savgol",
+    "plot_event_hierarchy",
+    "plot_uh_shapes",
+    "plot_convolution",
 ]

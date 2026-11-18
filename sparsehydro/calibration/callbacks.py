@@ -6,17 +6,18 @@ A callback is any callable with the signature::
 
 The ``info`` dict contains:
 
-+------------------+--------+-----------------------------------------------+
-| Key              | Type   | Description                                   |
-+==================+========+===============================================+
-| ``generation``   | int    | Current generation / iteration (1-based)      |
-| ``n_evals``      | int    | Total function evaluations so far             |
-| ``n_pareto``     | int    | Number of non-dominated solutions             |
-| ``pareto_F``     | ndarray| Pareto objectives in **minimisation form**,   |
-|                  |        | shape ``(n_pareto, n_obj)``                   |
-| ``objective_names`` | list | Objective names (same order as columns)    |
-| ``minimize_flags``  | list | ``True`` for minimised objectives          |
-+------------------+--------+-----------------------------------------------+
+``generation`` (int)
+    Current generation / iteration (1-based).
+``n_evals`` (int)
+    Total function evaluations so far.
+``n_pareto`` (int)
+    Number of non-dominated solutions.
+``pareto_F`` (ndarray)
+    Pareto objectives in **minimisation form**, shape ``(n_pareto, n_obj)``.
+``objective_names`` (list)
+    Objective names (same order as columns).
+``minimize_flags`` (list)
+    ``True`` for minimised objectives.
 
 Pass any callable to a solver via its ``callback`` parameter::
 

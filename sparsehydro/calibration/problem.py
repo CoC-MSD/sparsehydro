@@ -46,15 +46,19 @@ are specified through a single ``column_map`` dictionary.  Values can be either 
 from __future__ import annotations
 
 import copy
+import warnings
 from typing import TYPE_CHECKING, Any, Callable, Union
 
 import numpy as np
 import pandas as pd
 
-from .objectives import IObjective
+from ..metrics.objectives import IObjective
 
 if TYPE_CHECKING:
     from ..models import IModel
+
+from .._columns import ColumnExtractor
+from .diagnostics import slow_response_warnings
 
 # Reserved keys in column_map that specify calibration roles, not column renames.
 _ROLE_KEYS = frozenset({"observed", "predicted", "mask"})
@@ -83,12 +87,7 @@ def _resolve_extractor(
     if callable(mapping_value):
         return mapping_value
     if isinstance(mapping_value, str):
-        col = mapping_value
-        return lambda data, c=col: (
-            data[c].to_numpy(dtype=float)
-            if isinstance(data, pd.DataFrame)
-            else np.asarray(data[c], dtype=float)
-        )
+        return ColumnExtractor(mapping_value, dtype=float)
     raise TypeError(
         f"column_map['{role}'] must be a column name (str) or callable; "
         f"got {type(mapping_value).__name__!r}."
@@ -168,6 +167,12 @@ class CalibrationProblem:
         carry their own ``mask`` override this default.  Positions where
         observed or predicted is ``NaN`` are always excluded regardless.
     :type mask: str or Callable or numpy.ndarray or None
+    :param skip_infeasible: When ``True``, a parameter vector that violates any
+        of the model's inequality constraints is not run: every objective gets
+        ``penalty_weight * (1 + sum(max(0, g)**2))`` instead. Use it for models
+        whose ``predict()`` refuses infeasible vectors. With
+        ``penalty_weight=0`` an infeasible vector scores 0.
+    :type skip_infeasible: bool
     :param prepare_kwargs: Extra keyword arguments forwarded to ``prepare_fn``.
     :type prepare_kwargs: Any
 
@@ -189,6 +194,8 @@ class CalibrationProblem:
         column_map: "dict[str, Any] | None" = None,
         prepare_fn: Callable | None = None,
         mask: "str | Callable | np.ndarray | None" = None,
+        *,
+        skip_infeasible: bool = False,
         **prepare_kwargs: Any,
     ) -> None:
         if objectives is None or len(objectives) == 0:
@@ -207,6 +214,7 @@ class CalibrationProblem:
         self._objectives = list(objectives)
         self._column_map = cmap
         self._prepare_fn = prepare_fn
+        self._skip_infeasible = bool(skip_infeasible)
         self._prepare_kwargs = prepare_kwargs
 
         # ------------------------------------------------------------------
@@ -233,6 +241,7 @@ class CalibrationProblem:
             )
         else:
             prepared_data = None
+        self._warn_about_slow_responses(model, prepared_data)
 
         # ------------------------------------------------------------------
         # Extract observed array
@@ -264,6 +273,8 @@ class CalibrationProblem:
         self._objective_masks: list[np.ndarray | None] = [
             _resolve_mask(obj.mask, prepared_data, n_obs) for obj in self._objectives
         ]
+
+        self._build_selection_cache()
 
         # ------------------------------------------------------------------
         # Parameter registry snapshot (calibrate=True only).  Vector
@@ -299,6 +310,88 @@ class CalibrationProblem:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _build_selection_cache(self) -> None:
+        """Precompute everything that does not depend on the parameter vector.
+
+        ``observed``, the masks and the objective list are all fixed for the
+        problem's lifetime, so the NaN/mask selector, the selected observed
+        subset and each objective's observed-only context can be built once
+        instead of on every evaluation.  Profiling attributed ~19% of a typical
+        ``evaluate()`` call to redoing exactly this work per objective.
+
+        Selectors are deduplicated by mask identity: with several objectives and
+        no per-objective masks there is one selector array and one observed
+        subset, shared by reference.
+
+        Everything stored here must be treated as immutable after construction
+        -- :meth:`make_copy` shares it between problem copies.
+
+        :returns: Nothing.
+        :rtype: None
+        """
+        # Fast path applies only when "predicted" is a plain column name; a
+        # user-supplied callable keeps the DataFrame route.
+        predicted_spec = self._column_map.get("predicted")
+        self._predicted_key: str | None = (
+            predicted_spec if isinstance(predicted_spec, str) else None
+        )
+
+        self._observed = np.ascontiguousarray(self._observed, dtype=float)
+        obs_nan = np.isnan(self._observed)
+
+        self._effective_masks: list[np.ndarray | None] = []
+        self._selectors: list[np.ndarray] = []
+        self._selector_all: list[bool] = []
+        self._selector_empty: list[bool] = []
+        self._obs_selected: list[np.ndarray] = []
+        self._obj_ctx: list[Any] = []
+        #: False when prepare_observed() raised, forcing that objective onto the
+        #: compute() path so it raises the same error and earns the same penalty.
+        self._obj_ctx_ok: list[bool] = []
+
+        # Reuse one selector per distinct mask object.
+        by_mask: dict[int, int] = {}
+
+        for i, obj in enumerate(self._objectives):
+            eff = self._objective_masks[i]
+            if eff is None:
+                eff = self._mask
+            self._effective_masks.append(eff)
+
+            cache_key = id(eff)
+            prior = by_mask.get(cache_key)
+            if prior is not None:
+                selector = self._selectors[prior]
+            else:
+                selector = ~obs_nan
+                if eff is not None:
+                    selector = selector & np.asarray(eff, dtype=bool)
+                by_mask[cache_key] = i
+            self._selectors.append(selector)
+
+            empty = not selector.any()
+            self._selector_empty.append(empty)
+            self._selector_all.append(bool(selector.all()))
+
+            if empty:
+                self._obs_selected.append(self._observed[:0])
+                self._obj_ctx.append(None)
+                self._obj_ctx_ok.append(False)
+                continue
+
+            obs_sel = self._observed[selector]
+            self._obs_selected.append(obs_sel)
+            try:
+                self._obj_ctx.append(obj.prepare_observed(obs_sel, selector))
+                self._obj_ctx_ok.append(True)
+            except Exception:
+                # A context that cannot be built -- mis-shaped weights, say --
+                # is not fatal here.  Marking it not-ok routes the objective
+                # through compute(), which raises the same error and is
+                # converted to the same penalty as before.
+                self._obj_ctx.append(None)
+                self._obj_ctx_ok.append(False)
 
     def _preprocess(self, data: Any) -> Any:
         """Apply the data pipeline (prepare_fn or column_map renaming)."""
@@ -371,6 +464,17 @@ class CalibrationProblem:
     # Evaluation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _warn_about_slow_responses(model: "IModel", prepared_data: Any) -> None:
+        """Warn when a unit hydrograph's bounds allow responses slower than the record."""
+        try:
+            times = pd.to_datetime(prepared_data["datetime"])
+            record_hours = (times.iloc[-1] - times.iloc[0]) / pd.Timedelta(hours=1)
+        except Exception:  # noqa: BLE001 - no datetime column: nothing to compare against
+            return
+        for message in slow_response_warnings(model, float(record_hours)):
+            warnings.warn(message, UserWarning, stacklevel=3)
+
     def evaluate(self, x: np.ndarray, penalty_weight: float = 1e6) -> np.ndarray:
         """Apply a parameter vector, run ``predict()``, and return objectives.
 
@@ -390,44 +494,176 @@ class CalibrationProblem:
         :returns: 1-D array of length :attr:`n_objectives` in minimisation form.
         :rtype: numpy.ndarray
         """
-        for name, val in zip(self._param_names, x):
-            self._model.apply_flat_parameter(name, float(val))
-
-        pred_df = self._model.predict()
-        predicted = self._result_extractor(pred_df)
+        if self._skip_infeasible:
+            penalty = self._infeasible_penalty(x, penalty_weight)
+            if penalty is not None:
+                return np.full(len(self._objectives), penalty)
+        predicted, clean = self._run_model(x)
 
         F = np.empty(len(self._objectives), dtype=float)
         for i, obj in enumerate(self._objectives):
-            eff = self._objective_masks[i]
-            if eff is None:
-                eff = self._mask
-            try:
-                val = obj.compute(self._observed, predicted, mask=eff)
-            except Exception:
-                val = 1e12 if obj.minimize else -1e12
-            F[i] = val if obj.minimize else -val
+            F[i] = self._score(i, obj, predicted, clean)
 
         if penalty_weight > 0.0 and self._n_ieq_constr > 0:
-            G = np.array(self._model.inequality_constraints(), dtype=float)
-            penalty = penalty_weight * float(np.sum(np.maximum(0.0, G) ** 2))
-            F += penalty
+            F += self._penalty(penalty_weight)
 
         return F
+
+    def evaluate_single(
+        self,
+        x: np.ndarray,
+        index: int,
+        penalty_weight: float = 1e6,
+    ) -> float:
+        """Apply a parameter vector and return **one** objective value.
+
+        Equivalent to ``float(self.evaluate(x, penalty_weight)[index])`` but it
+        computes only objective *index*.  Scalar drivers -- ``ScipySolver`` and
+        both sequential fitters -- optimise a single objective while the problem
+        typically carries four, so this skips three metric evaluations per
+        iteration.
+
+        :param x: Parameter vector of length :attr:`n_params`.
+        :type x: numpy.ndarray
+        :param index: Index into :attr:`objective_names`.
+        :type index: int
+        :param penalty_weight: Multiplier for the squared-penalty term.
+        :type penalty_weight: float
+        :returns: Objective value in minimisation form.
+        :rtype: float
+        :raises IndexError: If *index* is out of range.
+        """
+        if not 0 <= index < len(self._objectives):
+            raise IndexError(
+                f"objective index {index} out of range for "
+                f"{len(self._objectives)} objectives"
+            )
+        if self._skip_infeasible:
+            penalty = self._infeasible_penalty(x, penalty_weight)
+            if penalty is not None:
+                return penalty
+        predicted, clean = self._run_model(x)
+        val = self._score(index, self._objectives[index], predicted, clean)
+        if penalty_weight > 0.0 and self._n_ieq_constr > 0:
+            val += self._penalty(penalty_weight)
+        return float(val)
+
+    # ------------------------------------------------------------------
+    # Evaluation internals
+    # ------------------------------------------------------------------
+
+    def _apply(self, x: np.ndarray) -> None:
+        """Write the calibratable parameter vector *x* into the model."""
+        for name, val in zip(self._param_names, x):
+            self._model.apply_flat_parameter(name, float(val))
+
+    def _infeasible_penalty(self, x: np.ndarray, penalty_weight: float) -> float | None:
+        """Penalty for an infeasible *x*, or ``None`` when *x* is feasible."""
+        self._apply(x)
+        violation = np.maximum(np.asarray(self._model.inequality_constraints(), float), 0.0)
+        if violation.any():
+            return penalty_weight * (1.0 + float(np.sum(violation ** 2)))
+        return None
+
+    def _run_model(self, x: np.ndarray) -> tuple[np.ndarray, bool]:
+        """Apply *x*, run the model, and return the predicted array.
+
+        :param x: Parameter vector of length :attr:`n_params`.
+        :type x: numpy.ndarray
+        :returns: ``(predicted, clean)`` where *clean* indicates the prediction
+            is free of NaN, so the precomputed selectors apply directly.
+        :rtype: tuple[numpy.ndarray, bool]
+        """
+        self._apply(x)
+
+        if self._predicted_key is not None:
+            arrays = self._model.predict_arrays()
+            predicted = np.asarray(arrays[self._predicted_key], dtype=float)
+        else:
+            predicted = np.asarray(
+                self._result_extractor(self._model.predict()), dtype=float
+            )
+
+        # One allocation-free reduction instead of a full isnan pass per
+        # objective.  A +inf makes the sum non-finite and routes the objective
+        # through compute(), which reproduces today's answer exactly -- today
+        # only NaN is excluded, never inf, and that must not change.
+        clean = bool(np.isfinite(predicted.sum()))
+        return predicted, clean
+
+    def _score(
+        self,
+        i: int,
+        obj: IObjective,
+        predicted: np.ndarray,
+        clean: bool,
+    ) -> float:
+        """Score one objective, in minimisation form.
+
+        :param i: Objective index (selects the precomputed selector/context).
+        :type i: int
+        :param obj: The objective itself.
+        :type obj: IObjective
+        :param predicted: Full-length predicted array.
+        :type predicted: numpy.ndarray
+        :param clean: Whether *predicted* is NaN-free.
+        :type clean: bool
+        :returns: Objective value, negated when the objective is maximised.
+        :rtype: float
+        """
+        if self._selector_empty[i]:
+            # Today this path raises inside compute() and is caught below; skip
+            # straight to the same value.
+            return 1e12 if obj.minimize else -1e12
+        try:
+            if clean and self._obj_ctx_ok[i]:
+                pred_sel = (
+                    predicted if self._selector_all[i] else predicted[self._selectors[i]]
+                )
+                val = obj.compute_selected(
+                    self._obs_selected[i], pred_sel, self._obj_ctx[i]
+                )
+            else:
+                val = obj.compute(
+                    self._observed, predicted, mask=self._effective_masks[i]
+                )
+        except Exception:
+            val = 1e12 if obj.minimize else -1e12
+        return val if obj.minimize else -val
+
+    def _penalty(self, penalty_weight: float) -> float:
+        """Return the squared inequality-constraint penalty term.
+
+        :param penalty_weight: Multiplier for the penalty.
+        :type penalty_weight: float
+        :returns: ``penalty_weight * sum(max(0, g)**2)``.
+        :rtype: float
+        """
+        G = np.array(self._model.inequality_constraints(), dtype=float)
+        return penalty_weight * float(np.sum(np.maximum(0.0, G) ** 2))
 
     # ------------------------------------------------------------------
     # Copy for parallel workers
     # ------------------------------------------------------------------
 
     def make_copy(self) -> "CalibrationProblem":
-        """Return a deep-copied :class:`CalibrationProblem` safe for parallel workers.
+        """Return a deep copy of this problem that is safe for parallel workers.
 
         The deep-copied model already holds its prepared state; data preparation
         is not re-run.  All mutable state (model, observed array, bounds) is
         independent from the original.
 
+        Subclasses are preserved: the copy has the same type as ``self``.
+
         :rtype: CalibrationProblem
         """
-        cp = CalibrationProblem.__new__(CalibrationProblem)
+        cp = type(self).__new__(type(self))
+        # Copy the whole namespace rather than enumerating fields: the previous
+        # hand-written list had to be extended for every new attribute, and a
+        # missed one surfaces as an AttributeError inside a worker process.
+        # Everything not reassigned below is immutable after __init__ and safe
+        # to share; the selection cache in particular is read-only by contract.
+        cp.__dict__.update(self.__dict__)
         cp._model = copy.deepcopy(self._model)
         cp._observed = self._observed.copy()
         cp._objectives = list(self._objectives)
@@ -435,14 +671,12 @@ class CalibrationProblem:
         cp._objective_masks = [
             None if m is None else m.copy() for m in self._objective_masks
         ]
-        cp._result_extractor = self._result_extractor
-        cp._column_map = self._column_map
-        cp._prepare_fn = self._prepare_fn
-        cp._prepare_kwargs = self._prepare_kwargs
         cp._param_names = list(self._param_names)
         cp._xl = self._xl.copy()
         cp._xu = self._xu.copy()
-        cp._n_ieq_constr = self._n_ieq_constr
         cp._constraint_names = list(self._constraint_names)
         cp._constraint_descriptions = list(self._constraint_descriptions)
+        # The cache indexes into the copied masks/observed, so rebuild it rather
+        # than leaving it pointing at the original's arrays.
+        cp._build_selection_cache()
         return cp

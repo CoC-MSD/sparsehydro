@@ -46,6 +46,15 @@ import pandas as pd
 from ...enums import ModelState
 from ..base import IModel
 from ...parameters import FieldRecord, ScalarParameter
+from ...registry import registry
+
+# Optional numba acceleration for the hot excess loop.  When numba is importable
+# the stateful recurrence in ``compute_excess_series`` is JIT-compiled; otherwise
+# the pure-Python reference below runs unchanged.  ``fastmath`` is kept OFF so the
+# compiled exp/log stay bit-identical to the reference.
+from ..._numba import HAS_NUMBA as _HAS_NUMBA, njit
+from ..forcing.snow import snow_step, snow_step_nb
+
 
 
 def _wet_step_excess(ia0: float, k_dep: float, P: float) -> float:
@@ -70,6 +79,121 @@ def _wet_step_excess(ia0: float, k_dep: float, P: float) -> float:
     return (P - p_star) - (1.0 / k_dep - ia0 * math.exp(-k_dep * P))
 
 
+@njit(cache=True, fastmath=False)
+def _wet_step_excess_nb(ia0, k_dep, P):
+    """numba twin of :func:`_wet_step_excess` (identical arithmetic)."""
+    if P <= 0.0:
+        return 0.0
+    if k_dep * ia0 <= 1.0:
+        return P - ia0 * (1.0 - math.exp(-k_dep * P))
+    p_star = math.log(k_dep * ia0) / k_dep
+    if p_star >= P:
+        return 0.0
+    return (P - p_star) - (1.0 / k_dep - ia0 * math.exp(-k_dep * P))
+
+
+#: Series :func:`_compute_excess_core_nb` can record (see ``record`` in :meth:`IAModel.compute_excess_series`).
+IA_RECORD_KEYS = ("ia_available", "swe", "snowfall", "melt")
+
+
+@njit(cache=True, fastmath=False)
+def _compute_excess_core_nb(rainfall_mm, dt_hours, temperature, use_temp,
+                            ia_max, k0, kT, theta, T_ref, k_dep, T_freeze,
+                            snow_on, snow_ddf, snow_T, record):
+    """Compiled transcription of the :meth:`IAModel.compute_excess_series` loop.
+
+    ``None`` sentinels (temperature / snow_T) are passed as typed flags
+    (``use_temp`` / ``snow_on``) so numba compiles one concrete signature rather
+    than specializing on optional types.
+
+    The arithmetic is a line-for-line copy of the pure-Python reference and
+    ``fastmath`` is off, so the output is bit-identical to it.
+
+    Returns ``(excess, ia_available, swe, snowfall, melt)``; the last four are
+    end-of-step values when *record* is true and empty otherwise, so the
+    calibration path allocates nothing extra.
+    """
+    n = rainfall_mm.shape[0]
+    excess = np.zeros(n, dtype=np.float64)
+    m = n if record else 0
+    rec_ia = np.zeros(m, dtype=np.float64)
+    rec_swe = np.zeros(m, dtype=np.float64)
+    rec_snowfall = np.zeros(m, dtype=np.float64)
+    rec_melt = np.zeros(m, dtype=np.float64)
+    ia_avail = ia_max
+    swe = 0.0
+    for i in range(n):
+        P = rainfall_mm[i]
+        dt = dt_hours[i]
+        T = temperature[i] if use_temp else T_ref
+        snowfall = 0.0
+        melt = 0.0
+        if snow_on:
+            swe, P, snowfall, melt = snow_step_nb(P, T, dt, swe, snow_T, snow_ddf)
+        if P <= 0.0:
+            if T >= T_freeze:
+                k_rec = k0 + kT * math.exp(theta * (T - T_ref))
+            else:
+                k_rec = 0.0
+            deficit = ia_max - ia_avail
+            ia_avail = ia_max - deficit * math.exp(-k_rec * dt)
+        else:
+            excess[i] = _wet_step_excess_nb(ia_avail, k_dep, P)
+            ia_avail = ia_avail * math.exp(-k_dep * P)
+        if ia_avail < 0.0:
+            ia_avail = 0.0
+        elif ia_avail > ia_max:
+            ia_avail = ia_max
+        if record:
+            rec_ia[i] = ia_avail
+            rec_swe[i] = swe
+            rec_snowfall[i] = snowfall
+            rec_melt[i] = melt
+    return excess, rec_ia, rec_swe, rec_snowfall, rec_melt
+
+
+def _compute_excess_series_fast(
+    rainfall_mm,
+    dt_hours,
+    temperature,
+    ia_max,
+    k0,
+    kT,
+    theta,
+    T_ref,
+    k_dep,
+    T_freeze,
+    snow_ddf=0.0,
+    snow_T=None,
+    record=None,
+):
+    """numba-backed twin of :meth:`IAModel.compute_excess_series`.
+
+    Same signature and semantics; ``temperature`` / ``snow_T`` may be ``None``.
+    Only the array marshalling lives here — the recurrence itself is
+    :func:`_compute_excess_core_nb`.
+
+    :returns: Rainfall excess depth series, same length as *rainfall_mm*.
+    :rtype: numpy.ndarray
+    """
+    rainfall_mm = np.ascontiguousarray(rainfall_mm, dtype=np.float64)
+    dt_hours = np.ascontiguousarray(dt_hours, dtype=np.float64)
+    use_temp = temperature is not None
+    temp_arr = (np.ascontiguousarray(temperature, dtype=np.float64)
+                if use_temp else np.empty(0, dtype=np.float64))
+    snow_on = snow_T is not None
+    excess, *series = _compute_excess_core_nb(
+        rainfall_mm, dt_hours, temp_arr, use_temp,
+        float(ia_max), float(k0), float(kT), float(theta), float(T_ref),
+        float(k_dep), float(T_freeze), snow_on, float(snow_ddf),
+        float(snow_T) if snow_on else 0.0, record is not None,
+    )
+    if record is not None:
+        record.update(zip(IA_RECORD_KEYS, series))
+    return excess
+
+
+@registry.register
 class IAModel(IModel):
     """Stateful initial-abstraction model implementing the :class:`~sparsehydro.models.IModel` lifecycle.
 
@@ -105,6 +229,7 @@ class IAModel(IModel):
     """
 
     model_name = "initial-abstraction"
+    supports_array_predict = True
 
     def __init__(
         self,
@@ -147,6 +272,12 @@ class IAModel(IModel):
         self.T_freeze = float(T_freeze)
         self.ia_avail: float = self.ia_max
         self._prepared_df: pd.DataFrame | None = None
+        # Forcing arrays and timestep cached by prepare(); see predict_arrays().
+        self._dt_hours: float = 1.0 / 12.0
+        self._dt_arr: np.ndarray | None = None
+        self._rain_arr: np.ndarray | None = None
+        self._temp_arr: np.ndarray | None = None
+        self._datetime_arr: np.ndarray | None = None
 
     # ------------------------------------------------------------------
     # IModel lifecycle
@@ -221,6 +352,16 @@ class IAModel(IModel):
             description="Rainfall excess depth after initial abstraction",
             calibratable=False,
         ))
+        self.register_trace_field(FieldRecord(
+            "ia_available", units=depth_units, role="state",
+            description="Remaining initial-abstraction capacity at the end of the step"))
+        if self._snow:
+            self.register_trace_field(FieldRecord(
+                "swe", units=depth_units, role="state", description="Snowpack water equivalent"))
+            self.register_trace_field(FieldRecord(
+                "snowfall", units=depth_units, role="flux", description="Precipitation stored as snow"))
+            self.register_trace_field(FieldRecord(
+                "melt", units=depth_units, role="flux", description="Snowmelt released as liquid input"))
 
         self._state = ModelState.INITIALIZED
 
@@ -268,32 +409,45 @@ class IAModel(IModel):
             df["temperature_c"] = df["temperature_c"].fillna(T_ref)
 
         self._prepared_df = df
+        # Cache the arrays predict() needs.  These are fixed for the prepared
+        # window, but predict() used to re-derive the timestep with a pandas
+        # diff/median and reallocate dt_arr on every call -- once per candidate
+        # parameter set, throughout a calibration.
+        diffs = df["datetime"].diff().dropna()
+        self._dt_hours = pd.Timedelta(diffs.median()).total_seconds() / 3600.0
+        self._dt_arr = np.full(len(df), self._dt_hours)
+        self._rain_arr = df[self._rainfall_col].to_numpy(dtype=float)
+        self._temp_arr = df["temperature_c"].to_numpy(dtype=float)
+        self._datetime_arr = df["datetime"].values
         self._sync_from_params()
         self.reset()
         self._state = ModelState.PREPARED
 
-    def predict(self) -> pd.DataFrame:
-        """Compute rainfall excess for the prepared time series.
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """Compute rainfall excess, returning plain arrays.
 
-        :returns: DataFrame with columns ``datetime`` and the unit-specific
-            excess column (``p_excess_in`` or ``p_excess_mm``).
-        :rtype: pandas.DataFrame
+        :returns: Mapping with ``datetime`` and the unit-specific excess column.
+        :rtype: dict[str, numpy.ndarray]
         :raises RuntimeError: If :meth:`prepare` has not been called.
         """
         if self._prepared_df is None:
             raise RuntimeError("Call prepare(data) before predict().")
 
         self._sync_from_params()
-        df = self._prepared_df
+        excess = self._run_engine()
+        self._state = ModelState.PREDICTED
+        return {"datetime": self._datetime_arr, self._excess_col: excess}
 
-        diffs = df["datetime"].diff().dropna()
-        dt_hours = pd.Timedelta(diffs.median()).total_seconds() / 3600.0
-        dt_arr = np.full(len(df), dt_hours)
-
-        excess = IAModel.compute_excess_series(
-            rainfall_mm=df[self._rainfall_col].to_numpy(dtype=float),
-            dt_hours=dt_arr,
-            temperature=df["temperature_c"].to_numpy(dtype=float),
+    def _run_engine(self, record: dict | None = None) -> np.ndarray:
+        # The compiled core is a bit-identical transcription of the reference
+        # (fastmath off), so this swaps speed in without changing results.
+        _engine = (_compute_excess_series_fast if _HAS_NUMBA
+                   else IAModel.compute_excess_series)
+        kwargs = {} if record is None else {"record": record}
+        return _engine(
+            rainfall_mm=self._rain_arr,
+            dt_hours=self._dt_arr,
+            temperature=self._temp_arr,
             ia_max=self.ia_max,
             k0=self.k0,
             kT=self.kT,
@@ -303,14 +457,25 @@ class IAModel(IModel):
             T_freeze=self.T_freeze,
             snow_ddf=self.snow_ddf if self._snow else 0.0,
             snow_T=self.snow_T if self._snow else None,
+            **kwargs,
         )
 
-        result = pd.DataFrame({
-            "datetime": df["datetime"].values,
-            self._excess_col: excess,
-        })
-        self._state = ModelState.PREDICTED
-        return result
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Remaining abstraction capacity (and snowpack, snowfall, melt with snow) per step."""
+        self._sync_from_params()
+        record: dict[str, np.ndarray] = {}
+        self._run_engine(record)
+        return {k: record[k] for k in self.trace_field_names}
+
+    def predict(self) -> pd.DataFrame:
+        """Compute rainfall excess for the prepared time series.
+
+        :returns: DataFrame with columns ``datetime`` and the unit-specific
+            excess column (``p_excess_in`` or ``p_excess_mm``).
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
+        return pd.DataFrame(self.predict_arrays())
 
     def finalize(self) -> None:
         """Release stored forcing data and advance to FINALIZED.
@@ -319,6 +484,10 @@ class IAModel(IModel):
         :rtype: None
         """
         self._prepared_df = None
+        self._dt_arr = None
+        self._rain_arr = None
+        self._temp_arr = None
+        self._datetime_arr = None
         self._state = ModelState.FINALIZED
 
     # ------------------------------------------------------------------
@@ -408,11 +577,17 @@ class IAModel(IModel):
         T_freeze: float,
         snow_ddf: float = 0.0,
         snow_T: float | None = None,
+        record: dict[str, np.ndarray] | None = None,
     ) -> np.ndarray:
         """Compute rainfall excess array for a full time series.
 
         Pure function (no instance state) — safe for parallel optimizer use.
         ``ia_avail`` starts at ``ia_max`` (fully saturated capacity).
+
+        This is the readable reference implementation.  When numba is installed,
+        :meth:`predict_arrays` routes through the compiled twin
+        (:func:`_compute_excess_series_fast`) instead, which produces
+        bit-identical output; this method stays the definition of correct.
 
         :param rainfall_mm: Per-step rainfall depth series.
         :type rainfall_mm: numpy.ndarray
@@ -439,6 +614,10 @@ class IAModel(IModel):
         :type snow_ddf: float
         :param snow_T: Rain/snow threshold [°C], or ``None`` to disable snow.
         :type snow_T: float | None
+        :param record: Optional dict filled with end-of-step series
+            (:data:`IA_RECORD_KEYS`): ``ia_available`` (remaining abstraction
+            capacity), ``swe`` (snowpack), ``snowfall`` and ``melt``.
+        :type record: dict | None
         :returns: Rainfall excess depth series, same length as *rainfall_mm*.
         :rtype: numpy.ndarray
         """
@@ -449,20 +628,16 @@ class IAModel(IModel):
         snow_on = snow_T is not None
         swe = 0.0
         use_temp = temperature is not None
+        rec = None if record is None else {k: np.zeros(n) for k in IA_RECORD_KEYS}
 
         for i in range(n):
             P = float(rainfall_mm[i])
             dt = float(dt_hours[i])
             T = float(temperature[i]) if use_temp else T_ref
+            snowfall = melt = 0.0
 
             if snow_on:
-                if T <= snow_T:
-                    swe += P
-                    P = 0.0
-                elif swe > 0.0:
-                    melt = min(swe, snow_ddf * (T - snow_T) * dt / 24.0)
-                    swe -= melt
-                    P += melt
+                swe, P, snowfall, melt = snow_step(P, T, dt, swe, snow_T, snow_ddf)
 
             if P <= 0.0:
                 if T >= T_freeze:
@@ -476,7 +651,12 @@ class IAModel(IModel):
                 ia_avail = ia_avail * math.exp(-k_dep * P)
 
             ia_avail = max(0.0, min(ia_max, ia_avail))
+            if rec is not None:
+                for key, value in zip(IA_RECORD_KEYS, (ia_avail, swe, snowfall, melt)):
+                    rec[key][i] = value
 
+        if record is not None:
+            record.update(rec)
         return excess
 
     # ------------------------------------------------------------------
@@ -499,3 +679,5 @@ class IAModel(IModel):
         if self._snow:
             self.snow_T = self.get_scalar_parameter("snow_T").value
             self.snow_ddf = self.get_scalar_parameter("snow_ddf").value
+
+

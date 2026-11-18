@@ -94,7 +94,9 @@ try:
             history: list[GenerationRecord] = []
 
             def scalar_fn(x: np.ndarray) -> float:
-                return float(worker.evaluate(x)[obj_idx])
+                # Only objective obj_idx is optimised; evaluate_single skips
+                # computing the others.
+                return worker.evaluate_single(x, obj_idx)
 
             if method == "differential_evolution":
                 bounds = list(zip(xl.tolist(), xu.tolist()))

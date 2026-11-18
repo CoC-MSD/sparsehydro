@@ -70,7 +70,7 @@ problem instance is passed unchanged to any solver backend.
 Object Relationships
 --------------------
 
-Every model subclasses the abstract :class:`~sparsehydro.interfaces.IModel`
+Every model subclasses the abstract :class:`~sparsehydro.models.base.IModel`
 lifecycle and exposes named :class:`~sparsehydro.parameters.ScalarParameter` and
 :class:`~sparsehydro.parameters.VectorParameter` objects through a built-in
 registry.  Domain models extend either ``IModel`` directly or the
@@ -151,7 +151,7 @@ registry.  Domain models extend either ``IModel`` directly or the
 
 The calibration layer is solver-agnostic: a single
 :class:`~sparsehydro.calibration.problem.CalibrationProblem` wraps a model, its
-data, and one or more :class:`~sparsehydro.calibration.objectives.IObjective`
+data, and one or more :class:`~sparsehydro.metrics.objectives.IObjective`
 functions, then passes unchanged to any
 :class:`~sparsehydro.calibration.solvers.base.ISolver`, which returns a
 :class:`~sparsehydro.calibration.result.CalibrationResult`.
@@ -251,4 +251,6 @@ drives the model and objectives on every evaluation.
    :hidden:
 
    getting_started
+   composition
+   unit_hydrographs
    api

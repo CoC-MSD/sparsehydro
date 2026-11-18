@@ -62,22 +62,42 @@ Public API
    * - :class:`ISolver`
      - Abstract solver interface
    * - :class:`NSGAIISolver`
-     - NSGA-II (requires pymoo)
+     - NSGA-II via pymoo (deprecated; use the ``"nsga2"`` solver, Platypus; needs ``sparsehydro[pymoo]``)
    * - :class:`ParticleSwarmSolver`
      - SMPSO / OMOPSO (requires platypus-opt)
    * - :class:`PlatypusSolver`
      - Any Platypus algorithm (requires platypus-opt)
    * - :class:`ScipySolver`
      - SciPy single-objective (requires scipy)
+   * - :class:`PlatypusCmaEsSolver`
+     - Single-objective CMA-ES, multi-seed / parallel (uses platypus-opt)
+
+**Train / validation splits** (:mod:`~sparsehydro.calibration.splits`)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Name
+     - Description
+   * - :class:`SplitConfig`
+     - Spin-up warmup + continuous / stratified split knobs
+   * - :func:`prepend_spinup`
+     - Synthetic pre-history so no real record is spent on warmup
+   * - :func:`build_masks`
+     - Warmup / train / validation step masks (:class:`SplitMasks`)
+   * - :func:`label_events_by_split`
+     - Assign storms to warmup / train / val; count edge-straddlers
 """
 
 from .callbacks import ProgressCallback
-from .objectives import (
+from ..metrics.objectives import (
     IObjective,
     KGE,
     MAE,
     MSE,
     RMSE,
+    WeightedRMSE,
     NashSutcliffe,
     PeakWeightedMSE,
     PBIAS,
@@ -85,16 +105,37 @@ from .objectives import (
     LogNSE,
     IndexOfAgreement,
     ConcordanceCorrelationCoefficient,
+    Con15,
+    DisjointWindowCCC,
 )
 from .problem import CalibrationProblem
-from .result import CalibrationResult, GenerationRecord, _identify_pareto
-from .solvers import ISolver, NSGAIISolver, ParticleSwarmSolver, PlatypusSolver, ScipySolver
+from .sequential import (
+    GlobalSequentialFitter,
+    PooledEventFitter,
+    PooledFitResult,
+    SequentialFitSummary,
+    SequentialFitter,
+)
+from .result import CalibrationResult, GenerationRecord, identify_pareto
+from .diagnostics import parameter_table, parameters_near_bounds, pareto_parameters_near_bounds, warn_if_near_bounds
+from .selection import feasible_history, select_peak_filtered_pareto
+from .solvers import ISolver, NSGAIISolver, PlatypusCmaEsSolver, ParticleSwarmSolver, PlatypusSolver, ScipySolver
+from .splits import (
+    SplitConfig,
+    SplitMasks,
+    build_masks,
+    dry_edge_flags,
+    label_events_by_split,
+    prepend_spinup,
+    wrap_seasonal_slip_days,
+)
 
 __all__ = [
     # Objectives
     "IObjective",
     "MSE",
     "RMSE",
+    "WeightedRMSE",
     "MAE",
     "PeakWeightedMSE",
     "NashSutcliffe",
@@ -104,6 +145,8 @@ __all__ = [
     "LogNSE",
     "IndexOfAgreement",
     "ConcordanceCorrelationCoefficient",
+    "Con15",
+    "DisjointWindowCCC",
     # Problem
     "CalibrationProblem",
     # Result
@@ -112,9 +155,30 @@ __all__ = [
     # Solvers
     "ISolver",
     "NSGAIISolver",
+    "PlatypusCmaEsSolver",
     "ParticleSwarmSolver",
     "PlatypusSolver",
     "ScipySolver",
+    # Splits
+    "SplitConfig",
+    "SplitMasks",
+    "prepend_spinup",
+    "dry_edge_flags",
+    "build_masks",
+    "label_events_by_split",
+    "wrap_seasonal_slip_days",
     # Callbacks
     "ProgressCallback",
+    "identify_pareto",
+    "parameter_table",
+    "parameters_near_bounds",
+    "pareto_parameters_near_bounds",
+    "warn_if_near_bounds",
+    "feasible_history",
+    "select_peak_filtered_pareto",
+    "SequentialFitter",
+    "SequentialFitSummary",
+    "GlobalSequentialFitter",
+    "PooledEventFitter",
+    "PooledFitResult",
 ]

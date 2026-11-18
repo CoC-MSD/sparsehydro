@@ -1,7 +1,8 @@
 """Visualization module tests — all functions called with synthetic data.
 
-Artifacts (HTML files) are written to ``tests/artifacts/visualization/`` for
-manual review in a browser.  The directory is created automatically.
+Artifacts (HTML files) are written for manual review in a browser, to
+``$SPARSEHYDRO_TEST_ARTIFACTS/visualization`` when that variable is set and to
+the system temp directory otherwise -- never into the repository.
 
 Run:
     python -m pytest tests/test_visualization.py -v
@@ -9,7 +10,9 @@ Run:
 
 from __future__ import annotations
 
+import os
 import pathlib
+import tempfile
 from typing import List
 
 import numpy as np
@@ -20,7 +23,10 @@ import pytest
 # Artifact output directory
 # ---------------------------------------------------------------------------
 
-ARTIFACTS = pathlib.Path(__file__).parent / "artifacts" / "visualization"
+ARTIFACTS = pathlib.Path(
+    os.environ.get("SPARSEHYDRO_TEST_ARTIFACTS")
+    or pathlib.Path(tempfile.gettempdir()) / "sparsehydro-test-artifacts"
+) / "visualization"
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -72,7 +78,7 @@ def _make_calibration_result(
     minimize_flags: List[bool] | None = None,
 ):
     """Build a synthetic CalibrationResult with history."""
-    from sparsehydro.calibration.result import CalibrationResult, GenerationRecord, _identify_pareto
+    from sparsehydro.calibration.result import CalibrationResult, GenerationRecord, identify_pareto
 
     if minimize_flags is None:
         minimize_flags = [True] * n_obj
@@ -81,13 +87,13 @@ def _make_calibration_result(
     for gen in range(1, n_generations + 1):
         X = RNG.uniform(0, 1, (n_solutions, n_params))
         F = RNG.uniform(0, 1, (n_solutions, n_obj))
-        pareto_mask = _identify_pareto(F)
+        pareto_mask = identify_pareto(F)
         history.append(
             GenerationRecord(generation=gen, X=X, F=F, n_pareto=int(pareto_mask.sum()))
         )
 
     last = history[-1]
-    pareto_mask = _identify_pareto(last.F)
+    pareto_mask = identify_pareto(last.F)
     pareto_X = last.X[pareto_mask]
     pareto_F = last.F[pareto_mask]
 

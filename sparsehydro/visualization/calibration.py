@@ -43,6 +43,8 @@ try:
         x_obj: Union[int, str] = 0,
         y_obj: Union[int, str] = 1,
         title: str = "Pareto Front Evolution",
+        show_knee: bool = False,
+        show_bounds: bool = False,
     ) -> go.Figure:
         """Animated scatter showing all solutions and the Pareto front per generation.
 
@@ -57,10 +59,17 @@ try:
         :type y_obj: int or str
         :param title: Figure title.
         :type title: str
+        :param show_knee: Overlay a star marker on the knee (compromise)
+            solution of the **final** Pareto front (see
+            :meth:`~sparsehydro.calibration.result.CalibrationResult.knee_index`).
+        :type show_knee: bool
+        :param show_bounds: Overlay a dashed rectangle spanning the bounds of
+            the **final** Pareto-optimal objective values.
+        :type show_bounds: bool
         :returns: Plotly Figure with animation frames and slider.
         :rtype: plotly.graph_objects.Figure
         """
-        from ..calibration.result import _identify_pareto
+        from ..calibration.result import identify_pareto
 
         obj_names = result.objective_names
         min_flags = result.minimize_flags
@@ -76,7 +85,7 @@ try:
         for rec in result.history:
             all_x = _display_col(rec.F, xi, min_flags)
             all_y = _display_col(rec.F, yi, min_flags)
-            is_pareto = _identify_pareto(rec.F)
+            is_pareto = identify_pareto(rec.F)
             par_x = all_x[is_pareto]
             par_y = all_y[is_pareto]
 
@@ -103,7 +112,11 @@ try:
                     showlegend=False,
                 ),
             ]
-            frames.append(go.Frame(data=frame_data, name=str(rec.generation)))
+            # Restrict frames to the two animated traces so any static
+            # knee/bounds overlay traces appended below are left untouched.
+            frames.append(
+                go.Frame(data=frame_data, name=str(rec.generation), traces=[0, 1])
+            )
             slider_steps.append(
                 dict(
                     args=[
@@ -116,7 +129,7 @@ try:
             )
 
         first = result.history[0]
-        is_pareto0 = _identify_pareto(first.F)
+        is_pareto0 = identify_pareto(first.F)
         init_x = _display_col(first.F, xi, min_flags)
         init_y = _display_col(first.F, yi, min_flags)
         init_data = [
@@ -140,6 +153,43 @@ try:
                 name="Pareto front",
             ),
         ]
+
+        if (show_bounds or show_knee) and len(result.pareto_F) > 0:
+            final_x = _display_col(result.pareto_F, xi, min_flags)
+            final_y = _display_col(result.pareto_F, yi, min_flags)
+
+            if show_bounds:
+                x0, x1 = float(final_x.min()), float(final_x.max())
+                y0, y1 = float(final_y.min()), float(final_y.max())
+                init_data.append(
+                    go.Scatter(
+                        x=[x0, x1, x1, x0, x0],
+                        y=[y0, y0, y1, y1, y0],
+                        mode="lines",
+                        line=dict(color="rgba(214,39,40,0.7)", width=1.5, dash="dash"),
+                        name="Final Pareto bounds",
+                        hoverinfo="skip",
+                    )
+                )
+
+            if show_knee:
+                ki = result.knee_index()
+                init_data.append(
+                    go.Scatter(
+                        x=[float(final_x[ki])],
+                        y=[float(final_y[ki])],
+                        mode="markers+text",
+                        marker=dict(
+                            symbol="star",
+                            size=18,
+                            color="crimson",
+                            line=dict(color="black", width=1),
+                        ),
+                        text=["knee"],
+                        textposition="top center",
+                        name="Knee (compromise)",
+                    )
+                )
 
         layout = go.Layout(
             title=title,
@@ -188,6 +238,8 @@ try:
         color_by: Union[str, None] = None,
         title: str = "Pareto Front — Parallel Coordinates",
         use_final_pareto_only: bool = True,
+        include_history: bool = False,
+        highlight_index: Union[int, None] = None,
     ) -> go.Figure:
         """Parallel-axis trade-off explorer for Pareto solutions.
 
@@ -197,18 +249,33 @@ try:
 
         :param result: Calibration result.
         :type result: CalibrationResult
-        :param color_by: Objective name to use for line colour.  Defaults to first objective.
+        :param color_by: Objective name to use for line colour.  Defaults to
+            first objective, or ``"generation"`` when *include_history* is set.
         :type color_by: str or None
         :param title: Figure title.
         :type title: str
         :param use_final_pareto_only: Plot only the final Pareto front when
             ``True``; plot all final-generation solutions when ``False``.
+            Ignored when *include_history* is ``True``.
         :type use_final_pareto_only: bool
+        :param include_history: Plot every solution from **every** generation,
+            prepending a ``generation`` axis and colouring lines by generation
+            (unless overridden with *color_by*) so the evolution of the search
+            is visible.
+        :type include_history: bool
+        :param highlight_index: Row index (into the plotted solutions, e.g.
+            :meth:`~sparsehydro.calibration.result.CalibrationResult.knee_index`
+            when plotting the final Pareto front) of a solution to highlight.
+            A narrow ``constraintrange`` is applied around that solution's
+            objective values so it stays coloured while all other lines fade.
+        :type highlight_index: int or None
         :returns: Plotly Figure with ``go.Parcoords`` trace.
         :rtype: plotly.graph_objects.Figure
         """
         df = result.to_pareto_dataframe()
-        if use_final_pareto_only:
+        if include_history:
+            plot_df = df.reset_index(drop=True)
+        elif use_final_pareto_only:
             plot_df = df[df["is_pareto"]].reset_index(drop=True)
         else:
             final_gen = df["generation"].max()
@@ -219,7 +286,12 @@ try:
             plot_df = df[df["generation"] == final_gen].reset_index(drop=True)
 
         obj_names = result.objective_names
-        color_col = color_by if (color_by and color_by in obj_names) else obj_names[0]
+        if color_by and (color_by in obj_names or color_by in plot_df.columns):
+            color_col = color_by
+        elif include_history:
+            color_col = "generation"
+        else:
+            color_col = obj_names[0]
 
         def _dim(col: str) -> dict:
             vals = plot_df[col].tolist()
@@ -229,8 +301,25 @@ try:
                 hi += 1e-6
             return dict(label=col, values=vals, range=[lo, hi])
 
-        dims = [_dim(p) for p in result.param_names]
+        dims = []
+        if include_history:
+            dims.append(_dim("generation"))
+        dims += [_dim(p) for p in result.param_names]
         dims += [_dim(o) for o in obj_names]
+
+        if highlight_index is not None:
+            if not 0 <= highlight_index < len(plot_df):
+                raise IndexError(
+                    f"highlight_index {highlight_index} is out of range for "
+                    f"{len(plot_df)} plotted solutions."
+                )
+            for dim in dims:
+                if dim["label"] not in obj_names:
+                    continue
+                value = float(plot_df.loc[highlight_index, dim["label"]])
+                lo, hi = dim["range"]
+                eps = 0.02 * (hi - lo)
+                dim["constraintrange"] = [value - eps, value + eps]
 
         color_vals = plot_df[color_col].tolist()
         fig = go.Figure(

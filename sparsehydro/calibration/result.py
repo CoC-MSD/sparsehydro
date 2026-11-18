@@ -32,7 +32,7 @@ GenerationRecord = namedtuple(
 """
 
 
-def _identify_pareto(F: np.ndarray) -> np.ndarray:
+def identify_pareto(F: np.ndarray) -> np.ndarray:
     """Boolean mask of non-dominated solutions (all objectives minimised).
 
     O(n²) dominance check — used when pymoo is unavailable or as a fallback.
@@ -130,6 +130,55 @@ class CalibrationResult:
         idx_sol = int(np.argmin(self.pareto_F[:, idx_obj]))
         return self.pareto_X[idx_sol]
 
+    def knee_index(self) -> int:
+        """Index of the knee (elbow) solution on the Pareto front.
+
+        Each objective is min-max normalised over the front (minimisation
+        form), and the knee is the solution closest — in Euclidean distance —
+        to the ideal point (the origin of the normalised space).  This is the
+        classic "compromise" solution: the point past which improving one
+        objective costs disproportionately in the others.
+
+        :returns: Row index into :attr:`pareto_X` / :attr:`pareto_F`.
+        :rtype: int
+        :raises ValueError: If the Pareto front is empty.
+        """
+        if len(self.pareto_F) == 0:
+            raise ValueError("Pareto front is empty; no knee point exists.")
+        F = self.pareto_F
+        f_min = F.min(axis=0)
+        span = F.max(axis=0) - f_min
+        span[span == 0.0] = 1.0
+        normalised = (F - f_min) / span
+        return int(np.argmin(np.linalg.norm(normalised, axis=1)))
+
+    def knee_point(self) -> tuple[np.ndarray, np.ndarray]:
+        """Parameter vector and display-form objectives of the knee solution.
+
+        :returns: Tuple ``(x, f)`` where ``x`` is the knee parameter vector and
+            ``f`` the corresponding objective values in display form
+            (maximised objectives un-negated).
+        :rtype: tuple[numpy.ndarray, numpy.ndarray]
+        """
+        idx = self.knee_index()
+        return self.pareto_X[idx].copy(), self.objective_display_values()[idx].copy()
+
+    def pareto_objective_bounds(self) -> pd.DataFrame:
+        """Bounds of the Pareto-optimal objective values, in display form.
+
+        :returns: DataFrame indexed by objective name with ``min`` / ``max``
+            columns spanning the final Pareto front.
+        :rtype: pandas.DataFrame
+        :raises ValueError: If the Pareto front is empty.
+        """
+        if len(self.pareto_F) == 0:
+            raise ValueError("Pareto front is empty; no bounds exist.")
+        F = self.objective_display_values()
+        return pd.DataFrame(
+            {"min": F.min(axis=0), "max": F.max(axis=0)},
+            index=pd.Index(self.objective_names, name="objective"),
+        )
+
     def to_pareto_dataframe(self) -> pd.DataFrame:
         """Return a tidy DataFrame spanning all generations.
 
@@ -142,7 +191,7 @@ class CalibrationResult:
         rows = []
         final_gen = self.history[-1].generation if self.history else -1
         for rec in self.history:
-            is_pareto_mask = _identify_pareto(rec.F)
+            is_pareto_mask = identify_pareto(rec.F)
             for j in range(len(rec.X)):
                 row: dict = {"generation": rec.generation}
                 for k, name in enumerate(self.param_names):

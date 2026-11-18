@@ -87,6 +87,12 @@ class IModel(ABC):
     #: Must be defined by every concrete subclass.
     model_name: ClassVar[str]
 
+    #: Whether this model implements :meth:`predict_arrays` natively rather than
+    #: inheriting the DataFrame-unwrapping default.  Informational only --
+    #: :class:`~sparsehydro.calibration.problem.CalibrationProblem` calls
+    #: :meth:`predict_arrays` unconditionally, so nothing branches on this.
+    supports_array_predict: ClassVar[bool] = False
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         # Abstract subclasses (those that still have unimplemented abstract
@@ -112,6 +118,44 @@ class IModel(ABC):
         self._vector_parameters: dict[str, VectorParameter] = {}
         self._constraint_registry: list[ConstraintRecord] = []
         self._output_fields: dict[str, FieldRecord] = {}
+        self._trace_fields: dict[str, FieldRecord] = {}
+
+    def _reset_registries(self) -> None:
+        """Clear registered parameters, outputs, trace fields and constraints.
+
+        Call at the start of :meth:`initialize` so that initializing twice
+        re-registers everything once instead of appending duplicates.
+        """
+        self._scalar_parameters = {}
+        self._vector_parameters = {}
+        self._constraint_registry = []
+        self._output_fields = {}
+        self._trace_fields = {}
+
+    # ------------------------------------------------------------------
+    # Inputs supplied by other models (used by CompositeModel)
+    # ------------------------------------------------------------------
+
+    @property
+    def input_field_names(self) -> list[str]:
+        """Names of arrays this model can receive from another model.
+
+        A :class:`~sparsehydro.models.composite.CompositeModel` binds an
+        upstream output to one of these names and passes it with
+        :meth:`set_input` after :meth:`prepare` and before each predict.
+        The default is none.
+        """
+        return []
+
+    def set_input(self, name: str, values: np.ndarray) -> None:
+        """Replace input array *name* after :meth:`prepare`.
+
+        :raises KeyError: If *name* is not in :attr:`input_field_names`.
+        """
+        raise KeyError(
+            f"{type(self).__name__} accepts no bound inputs; got {name!r}. "
+            f"Available: {self.input_field_names}"
+        )
 
     # ------------------------------------------------------------------
     # State queries
@@ -231,6 +275,115 @@ class IModel(ABC):
         :returns: Model outputs, typically with a predicted-flow column.
         :rtype: pandas.DataFrame | pandas.Series
         """
+
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """Return :meth:`predict`'s output as plain arrays, without a DataFrame.
+
+        The calibration loop calls this instead of :meth:`predict` so the hot
+        path never builds a DataFrame that the caller immediately unwraps again.
+
+        This default implementation simply unwraps :meth:`predict`, so every
+        existing model works unchanged and is no slower than before.  Models that
+        can produce the arrays directly should override it -- and must return
+        exactly the keys of ``predict().columns``, with values equal to
+        ``predict()[col].to_numpy()``.  ``tests/test_fastpath_invariants.py``
+        enforces that equivalence.
+
+        Prefer building :meth:`predict` on top of this method rather than the
+        other way around: a model with two independent implementations will
+        eventually have two different answers.
+
+        Returned arrays may be views into model state; callers must not mutate
+        them.
+
+        :returns: Mapping of output column name to 1-D array.
+        :rtype: dict[str, numpy.ndarray]
+        """
+        out = self.predict()
+        if isinstance(out, pd.Series):
+            return {str(out.name): out.to_numpy()}
+        # Deliberately untyped: forcing dtype=float here would corrupt a
+        # datetime64 column.
+        return {str(c): out[c].to_numpy() for c in out.columns}
+
+    # ------------------------------------------------------------------
+    # Trace: components and internal states (secondary output)
+    # ------------------------------------------------------------------
+
+    def predict_trace(self) -> dict[str, np.ndarray]:
+        """Run the model and return its outputs plus every trace field.
+
+        The trace is the model's secondary output for plotting and checking:
+        the additive components of its outputs (each unit hydrograph of an
+        RDII model, each term of a composite sum) and its internal states and
+        fluxes (storages, remaining abstraction, snowpack, melt...), described
+        by :attr:`trace_fields`. :meth:`predict_arrays` is unchanged and never
+        computes them, so calibration pays nothing for tracing.
+
+        :returns: :meth:`predict_arrays` output, then one array per name in
+            :attr:`trace_field_names`, each of the same length.
+        :raises RuntimeError: If the model does not produce a registered trace
+            field.
+        """
+        outputs = self.predict_arrays()
+        out = dict(outputs)
+        extra = self._trace_arrays(outputs)
+        missing = []
+        for name in self.trace_field_names:
+            if name in extra:
+                out[name] = extra[name]
+            elif name not in out:
+                missing.append(name)
+        if missing:
+            raise RuntimeError(f"{type(self).__name__} registered trace fields it did not produce: {missing}")
+        return out
+
+    def _trace_arrays(self, outputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Compute the trace fields after a :meth:`predict_arrays` call that returned *outputs*.
+
+        Override in models that register trace fields; compute here (not in
+        :meth:`predict_arrays`) anything that costs time, so calibration does
+        not pay for it. The default has no trace.
+        """
+        return {}
+
+    def register_trace_field(self, field: FieldRecord) -> None:
+        """Register a trace field (a component, state or flux) during :meth:`initialize`.
+
+        :raises ValueError: If *field* has role ``"output"`` or its name is an
+            output field.
+        """
+        if field.role == "output":
+            raise ValueError(f"trace field {field.name!r} needs role 'component', 'state' or 'flux'")
+        if field.name in self._output_fields:
+            raise ValueError(f"trace field {field.name!r} is already an output field")
+        self.__dict__.setdefault("_trace_fields", {})[field.name] = field
+
+    @property
+    def trace_field_names(self) -> list[str]:
+        """Names of the registered trace fields, in registration order."""
+        return list(self.__dict__.get("_trace_fields", {}))
+
+    @property
+    def trace_fields(self) -> list[FieldRecord]:
+        """Registered trace fields (:class:`~sparsehydro.parameters.FieldRecord` with their roles)."""
+        return list(self.__dict__.get("_trace_fields", {}).values())
+
+    def get_trace_field(self, name: str) -> FieldRecord:
+        """Return the trace field *name*.
+
+        :raises KeyError: If no trace field *name* is registered.
+        """
+        fields = self.__dict__.get("_trace_fields", {})
+        if name not in fields:
+            raise KeyError(f"Trace field {name!r} not found. Available: {list(fields)}")
+        return fields[name]
+
+    def field_record(self, name: str) -> FieldRecord:
+        """Metadata of output or trace field *name*."""
+        if name in self._output_fields:
+            return self._output_fields[name]
+        return self.get_trace_field(name)
 
     @abstractmethod
     def finalize(self) -> None:
@@ -532,6 +685,13 @@ class IModel(ABC):
             for f in self._output_fields.values()
         ]
         return pd.DataFrame(rows)
+
+    def trace_field_metadata(self) -> "pd.DataFrame":
+        """One row per trace field: ``field``, ``role``, ``component_of``, ``units``, ``description``."""
+        return pd.DataFrame(
+            [{"field": f.name, "role": f.role, "component_of": f.component_of, "units": f.units,
+              "description": f.description} for f in self.trace_fields],
+            columns=["field", "role", "component_of", "units", "description"])
 
     def register_inequality_constraint(self, record: ConstraintRecord) -> None:
         """Register a named inequality constraint.

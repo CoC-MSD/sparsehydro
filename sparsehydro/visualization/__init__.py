@@ -26,6 +26,9 @@ Public API
 +------------------------------------------+------------------------------------------------------+
 | :func:`plot_calibration_dashboard`       | Multi-panel offline HTML dashboard                   |
 +------------------------------------------+------------------------------------------------------+
+| :func:`thin_for_display`                 | Min/max-envelope copy of a figure for inline display |
+| :func:`add_val_vrects`                   | Shade validation runs of a train/val split           |
++------------------------------------------+------------------------------------------------------+
 
 All functions require the optional ``plotly`` dependency::
 
@@ -38,7 +41,6 @@ RDII-specific functions additionally require::
 
 try:
     from .timeseries import (
-        VisualizationModel,
         plot_calibration_timeseries,
         plot_cumulative_volume,
         plot_data_explorer,
@@ -59,7 +61,9 @@ try:
         plot_splom,
     )
     from .rdii import plot_rdii_components, plot_rtk_shape
+    from .seasonality import plot_seasonality_components
     from .dashboard import plot_calibration_dashboard
+    from .display import add_val_vrects, thin_for_display
     from .unithydrograph import (
         plot_rainfall_flow_with_events,
         plot_filter_signals,
@@ -67,6 +71,10 @@ try:
         plot_sequential_fit,
         plot_parameter_evolution,
         plot_effective_area,
+        plot_variable_savgol,
+        plot_event_hierarchy,
+        plot_uh_shapes,
+        plot_convolution,
     )
 
 except ImportError:
@@ -107,8 +115,19 @@ except ImportError:
     def plot_rdii_components(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_rdii_components. Install with: pip install plotly")
 
+    def plot_seasonality_components(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError(
+            "plotly is required for plot_seasonality_components. Install with: pip install plotly"
+        )
+
     def plot_calibration_dashboard(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_calibration_dashboard. Install with: pip install plotly")
+
+    def thin_for_display(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for thin_for_display. Install with: pip install plotly")
+
+    def add_val_vrects(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for add_val_vrects. Install with: pip install plotly")
 
     def plot_rainfall_flow_with_events(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_rainfall_flow_with_events. Install with: pip install plotly")
@@ -128,6 +147,18 @@ except ImportError:
     def plot_effective_area(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_effective_area. Install with: pip install plotly")
 
+    def plot_variable_savgol(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_variable_savgol. Install with: pip install plotly")
+
+    def plot_event_hierarchy(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_event_hierarchy. Install with: pip install plotly")
+
+    def plot_uh_shapes(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_uh_shapes. Install with: pip install plotly")
+
+    def plot_convolution(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_convolution. Install with: pip install plotly")
+
     def plot_data_explorer(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_data_explorer. Install with: pip install plotly")
 
@@ -145,30 +176,13 @@ except ImportError:
     def plot_one_to_one_band(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_one_to_one_band. Install with: pip install plotly")
 
-    from ..models import IModel as _IModel  # noqa: E402
 
-    class VisualizationModel(_IModel):  # type: ignore[no-redef]
-        model_name = "visualization"
-
-        def initialize(self) -> None:
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
-        def validate(self) -> bool:  # type: ignore[return]
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
-        def prepare(self, data, **kwargs) -> None:
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
-        def predict(self):  # type: ignore[return]
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
-        def finalize(self) -> None:
-            raise ImportError("plotly is required for VisualizationModel. Install with: pip install plotly")
-
+from .model import VisualizationModel
 
 __all__ = [
     # Time-domain
     "plot_timeseries",
+    "plot_calibration_timeseries",
     "plot_residuals_scatter",
     "plot_cumulative_volume",
     "plot_data_explorer",
@@ -188,8 +202,13 @@ __all__ = [
     # RDII
     "plot_rtk_shape",
     "plot_rdii_components",
+    # Seasonality
+    "plot_seasonality_components",
     # Dashboard
     "plot_calibration_dashboard",
+    # Display helpers
+    "thin_for_display",
+    "add_val_vrects",
     # Unit hydrograph workflow
     "plot_rainfall_flow_with_events",
     "plot_filter_signals",
@@ -197,4 +216,8 @@ __all__ = [
     "plot_sequential_fit",
     "plot_parameter_evolution",
     "plot_effective_area",
+    "plot_variable_savgol",
+    "plot_event_hierarchy",
+    "plot_uh_shapes",
+    "plot_convolution",
 ]
