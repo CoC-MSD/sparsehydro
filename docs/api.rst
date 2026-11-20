@@ -303,6 +303,26 @@ Rules that drop, merge or split candidate events (rainfall depth, duration, flow
    :members:
    :show-inheritance:
 
+Storms From Rainfall
+~~~~~~~~~~~~~~~~~~~~
+
+Storms found from the rainfall alone, for sites where the flow is too noisy for :func:`~sparsehydro.events.detect_events`. The table goes straight into :func:`~sparsehydro.calibration.splits.masks.storm_scoring_mask`.
+
+.. code-block:: python
+
+   from sparsehydro.events import rain_storm_events
+   from sparsehydro.calibration.splits.masks import storm_scoring_mask
+
+   storms = rain_storm_events(data, min_rain_in=0.25, interevent_hours=6,
+                              split_at="2025-10-01")
+   train = (data["datetime"] < "2025-10-01").to_numpy()
+   train_mask = storm_scoring_mask(storms, train, 0.25, split="train",
+                                   pre_hours=1, tail_hours=72)
+
+.. automodule:: sparsehydro.events.rainfall
+   :members:
+   :show-inheritance:
+
 Hierarchical Detection
 ~~~~~~~~~~~~~~~~~~~~~~
 
