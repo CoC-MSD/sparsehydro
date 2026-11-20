@@ -6,6 +6,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ## [Unreleased]
 
+### Added
+
+- `sparsehydro.events.rain_storm_events` finds storms from the rainfall alone,
+  for sites such as pump stations where the flow is too noisy for
+  `detect_events`. A dry gap longer than `interevent_hours` starts a new storm
+  and storms under `min_rain_in` are dropped. The table it returns
+  (`start_idx`, `end_idx`, `eligible`, `split`) goes straight into
+  `storm_scoring_mask`.
+
 ## [1.0.0b1] - 2026-11-18
 
 First beta of 1.0.0: the public API (models and the registry, composition and

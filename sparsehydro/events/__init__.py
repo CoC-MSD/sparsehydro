@@ -7,6 +7,7 @@ Public API
 ----------
 - :class:`EventRecord` — dataclass for a single storm event
 - :func:`detect_events` — automatic event detection from rain/stormflow data
+- :func:`rain_storm_events`: storms found from the rainfall alone
 - :func:`events_to_dataframe` — convert a list of EventRecord to a DataFrame
 - :func:`load_events_from_csv` — load pre-defined events from a CSV file
 
@@ -30,6 +31,7 @@ from .io import (
     map_event_windows,
 )
 from .peaks import define_peaks
+from .rainfall import rain_storm_events
 from .records import (
     EventRecord,
     GlobalEvent,
@@ -59,6 +61,7 @@ __all__ = [
     "detect_events",
     "events_to_dataframe",
     "events_to_mask",
+    "rain_storm_events",
     "build_global_events",
     "flag_flow_response",
     "merge_by_interevent",
