@@ -5,7 +5,9 @@ from .components import CenteredWeeklyPatternModel, ObservedBackgroundModel, San
 from .fitting import (
     PatternEstimate,
     estimate_observed_background,
+    estimate_sanitary_level,
     estimate_sanitary_shapes,
+    estimate_sanitary_template,
     profile_slot_levels,
     slot_of_week,
 )
@@ -20,7 +22,9 @@ __all__ = [
     "ObservedBackgroundModel",
     "PatternEstimate",
     "estimate_observed_background",
+    "estimate_sanitary_level",
     "estimate_sanitary_shapes",
+    "estimate_sanitary_template",
     "profile_slot_levels",
     "slot_of_week",
 ]
