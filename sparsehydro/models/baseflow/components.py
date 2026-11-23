@@ -1,7 +1,9 @@
 """Baseline (sanitary / dry-weather) flow components.
 
 * :class:`SanitaryTemplateModel` -- a fixed normalised hour x weekday template
-  times a calibrated level.
+  times a calibrated level. With ``level_from_input=True`` the level is an
+  input bound from :class:`ObservedBackgroundModel` (for example a daily level
+  from :func:`~.fitting.estimate_sanitary_level`) times a calibrated scale.
 * :class:`CenteredWeeklyPatternModel` -- a level plus scaled hourly and weekday
   anomalies estimated beforehand (see :mod:`.fitting`). The level is either a
   calibrated mean or an input bound from :class:`ObservedBackgroundModel`.
@@ -56,27 +58,57 @@ class _BaselineBase(IModel):
 class SanitaryTemplateModel(_BaselineBase):
     """``sanitary_cfs = sanitary_level_cfs * template(hour, weekday)``.
 
+    With ``level_from_input=True`` the daily dry-weather level comes from the
+    bound input ``level_cfs``, and one calibrated scale multiplies it:
+    ``sanitary_cfs = sanitary_level_scale * level_cfs * template(hour, weekday)``.
+
     :param template: Normalised 24 hourly and 7 weekday factors (each mean 1).
-    :param level_cfs: Initial level [cfs].
-    :param level_upper_cfs: Upper bound of the level [cfs].
+    :param level_cfs: Initial level [cfs] (not used when the level is an input).
+    :param level_upper_cfs: Upper bound of the level [cfs] (not used when the
+        level is an input).
+    :param level_from_input: Take the level from the bound input ``level_cfs``
+        (for example an :class:`ObservedBackgroundModel` built from
+        :func:`~.fitting.estimate_sanitary_level`) and calibrate
+        ``sanitary_level_scale`` (start 1, bounds 0.5 to 1.5) instead of
+        ``sanitary_level_cfs``.
+
+    Example: a level input of 0.2 cfs, a scale of 1.1 and a template
+    multiplier of 1.5 give 1.1 x 0.2 x 1.5 = 0.33 cfs.
     """
 
     model_name: ClassVar[str] = "sanitary-template"
 
-    def __init__(self, template: SanitaryTemplate | None = None, level_cfs: float = 0.5,
-                 level_upper_cfs: float = 5.0) -> None:
+    def __init__(
+        self,
+        template: SanitaryTemplate | None = None,
+        level_cfs: float = 0.5,
+        level_upper_cfs: float = 5.0,
+        *,
+        level_from_input: bool = False,
+    ) -> None:
         super().__init__()
         self.template = template if template is not None else SanitaryTemplate((1.0,) * 24, (1.0,) * 7)
         if not (0 <= level_cfs <= level_upper_cfs and np.isfinite(level_upper_cfs)):
             raise ValueError("Invalid sanitary level bounds")
         self._level, self._upper = float(level_cfs), float(level_upper_cfs)
+        self.level_from_input = bool(level_from_input)
         self._values: np.ndarray | None = None
+        self._level_input: np.ndarray | None = None
+
+    @property
+    def input_field_names(self) -> list[str]:
+        return ["level_cfs"] if self.level_from_input else []
 
     def initialize(self) -> None:
         self._reset_registries()
-        self.register_scalar_parameter(ScalarParameter(
-            "sanitary_level_cfs", self._level, 0.0, self._upper, units="cfs",
-            description="Mean sanitary level over a reference week"))
+        if self.level_from_input:
+            self.register_scalar_parameter(ScalarParameter(
+                "sanitary_level_scale", 1.0, 0.5, 1.5, units="-",
+                description="Scale on the input daily dry-weather level"))
+        else:
+            self.register_scalar_parameter(ScalarParameter(
+                "sanitary_level_cfs", self._level, 0.0, self._upper, units="cfs",
+                description="Mean sanitary level over a reference week"))
         self.register_output_field(FieldRecord("datetime"))
         self.register_output_field(FieldRecord("sanitary_cfs", units="cfs", description="Sanitary flow"))
         self._state = ModelState.INITIALIZED
@@ -84,14 +116,25 @@ class SanitaryTemplateModel(_BaselineBase):
     def prepare(self, data: pd.DataFrame, **_: object) -> None:
         self._datetime = pd.DatetimeIndex(data["datetime"])
         self._values = self.template.predict(self._datetime)
+        self._level_input = np.zeros(len(data)) if self.level_from_input else None
         self._state = ModelState.PREPARED
+
+    def set_input(self, name: str, values: np.ndarray) -> None:
+        if name not in self.input_field_names:
+            raise KeyError(f"{type(self).__name__} inputs are {self.input_field_names}; got {name!r}")
+        self._level_input = np.asarray(values, dtype=float)
 
     def predict_arrays(self) -> dict[str, np.ndarray]:
         if self._values is None:
             raise RuntimeError("Prepare the sanitary template before prediction")
+        if self.level_from_input:
+            if self._level_input is None:
+                raise RuntimeError("Prepare the sanitary template before prediction")
+            level = self._p("sanitary_level_scale") * self._level_input
+        else:
+            level = self._p("sanitary_level_cfs")
         self._state = ModelState.PREDICTED
-        return {"datetime": self._datetime.to_numpy(),
-                "sanitary_cfs": self._p("sanitary_level_cfs") * self._values}
+        return {"datetime": self._datetime.to_numpy(), "sanitary_cfs": level * self._values}
 
 
 @registry.register

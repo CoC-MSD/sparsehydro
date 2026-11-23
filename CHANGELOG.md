@@ -6,6 +6,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the
 
 ## [Unreleased]
 
+### Added
+
+- `models.baseflow.estimate_sanitary_template`: hourly and daily multipliers
+  that scale a level, estimated from whole dry days, as a `SanitaryTemplate`.
+- `models.baseflow.estimate_sanitary_level`: a daily dry-weather level from the
+  rise between night-time and day-time flow on whole dry days, smoothed with a
+  rolling median and returned as an `ObservedBackground`.
+
+### Changed
+
+- `SanitaryTemplateModel(level_from_input=True)` takes its level from the bound
+  input `level_cfs` and calibrates `sanitary_level_scale` (start 1, bounds 0.5
+  to 1.5) instead of `sanitary_level_cfs`. The default is unchanged.
+
 ## [1.0.0b1] - 2026-11-18
 
 First beta of 1.0.0: the public API (models and the registry, composition and

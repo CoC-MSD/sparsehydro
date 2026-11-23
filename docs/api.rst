@@ -437,6 +437,13 @@ Forcing
 Baseflow
 ~~~~~~~~
 
+Sanitary baseline components and the estimators that fit them on training dry weather.
+For a dry-weather level that changes from day to day, build the hourly and daily multipliers with
+:func:`~sparsehydro.models.baseflow.fitting.estimate_sanitary_template`, a daily level with
+:func:`~sparsehydro.models.baseflow.fitting.estimate_sanitary_level` (on whole dry days, for
+example from :func:`~sparsehydro.calibration.splits.masks.dry_weather_mask`), and bind the level from an
+``ObservedBackgroundModel`` into ``SanitaryTemplateModel(template, level_from_input=True)``.
+
 .. automodule:: sparsehydro.models.baseflow.components
    :members:
    :show-inheritance:
